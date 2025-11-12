@@ -150,7 +150,7 @@ export class BasicInteractionAware {
   public async clickElement(selector: string) {
     try {
       let response;
-      await this.client['___currentFrame'].waitForTimeout(selector);
+      await this.client['___currentFrame'].waitForSelector(selector);
       await Promise.all([
         new Promise(async (resolve, reject) => {
           try {
@@ -168,22 +168,32 @@ export class BasicInteractionAware {
             setTimeout(resolve.bind(null, true), 5000);
 
             let clickSuccess;
-            // First, try clicking using document.querySelector().click()
-            try {
-              clickSuccess = await this.client['___currentFrame'].waitForFunction(
-                (selector) => {
-                  try {
-                    document.querySelector(selector).click(); // eslint-disable-line no-undef
-                    return true;
-                  } catch (e) {
-                    return false;
-                  }
-                },
-                { timeout: 2500},
-                selector,
-              );
-            } catch (error) {
-              clickSuccess = false;
+            // For React dropdowns and similar custom components, skip document.querySelector().click()
+            // and use Puppeteer's native click directly
+            const shouldUsePuppeteerClick = selector.includes('Dropdown-control') || 
+                                           selector.includes('dropdown') ||
+                                           selector.includes('react-select');
+            
+            if (!shouldUsePuppeteerClick) {
+              // First, try clicking using document.querySelector().click()
+              try {
+                clickSuccess = await this.client['___currentFrame'].waitForFunction(
+                  (selector) => {
+                    try {
+                      document.querySelector(selector).click(); // eslint-disable-line no-undef
+                      return true;
+                    } catch (e) {
+                      return false;
+                    }
+                  },
+                  { timeout: 2500},
+                  selector,
+                );
+              } catch (error) {
+                clickSuccess = false;
+              }
+            } else {
+              clickSuccess = false; // Force Puppeteer's native click
             }
 
             // If the first click fails, try using the frame.click from puppeteer
