@@ -1,4 +1,4 @@
-FROM node:18
+FROM --platform=linux/amd64 node:18
 # Note: ^ uses node:10.20.1-slim
 
 # Install latest chrome dev package and fonts to support major charsets (Chinese, Japanese, Arabic, Hebrew, Thai and a few others)
