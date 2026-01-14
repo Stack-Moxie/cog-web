@@ -81,21 +81,6 @@ export class Cog implements ICogServiceServer {
 
     this.cluster.queue(({ page }) => {
       return new Promise((resolve) => {
-        // Helper function to clean up and resolve the Promise
-        const cleanup = (reason: string) => {
-          if (processing > 0) {
-            console.log(`Cleaning up runSteps stream: ${reason} (${processing} steps still processing)`);
-          }
-          // Close all pages in this context to free resources
-          page.browserContext().pages().then((pages) => {
-            Promise.all(pages.map(p => p.close().catch(e => 
-              console.error('Error closing page during cleanup:', e)
-            )));
-          }).catch(e => console.error('Error getting pages during cleanup:', e));
-          
-          resolve(null);
-        };
-
         call.on('data', async (runStepRequest: RunStepRequest) => { // tslint:disable-line
           processing = processing + 1;
 
@@ -118,7 +103,7 @@ export class Cog implements ICogServiceServer {
           // If this was the last step to process and the client has ended the stream, then end our
           // stream as well.
           if (processing === 0 && clientEnded) {
-            cleanup('stream completed normally');
+            resolve(null);
             call.end();
           }
         });
@@ -128,21 +113,9 @@ export class Cog implements ICogServiceServer {
 
           // Only end the stream if we are done processing all steps.
           if (processing === 0) {
-            cleanup('stream ended by client');
+            resolve(null);
             call.end();
           }
-        });
-
-        // Handle errors and cancellations to prevent hanging cluster tasks
-        call.on('error', (error) => {
-          console.error('gRPC stream error in runSteps:', error);
-          cleanup('stream error');
-          call.end();
-        });
-
-        call.on('cancelled', () => {
-          console.log('gRPC stream cancelled in runSteps');
-          cleanup('stream cancelled');
         });
       });
     });
