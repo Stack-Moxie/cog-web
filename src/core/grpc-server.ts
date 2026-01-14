@@ -51,8 +51,7 @@ async function instantiateCluster(): Promise<Cluster> {
       retryDelay: process.env.hasOwnProperty('CLUSTER_RETRY_DELAY_MS') ? Number(process.env.CLUSTER_RETRY_DELAY_MS) : 3000,
       timeout: process.env.hasOwnProperty('CLUSTER_TIMEOUT_MS') ? Number(process.env.CLUSTER_TIMEOUT_MS) : 900000,
       puppeteerOptions: {
-        ...(process.env.IN_DOCKER && { executablePath: '/usr/bin/google-chrome' }), // adds executablePath only in docker
-        executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        executablePath: process.env.IN_DOCKER ? '/usr/bin/google-chrome' : '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
         headless: false,
         args: process.env.IN_DOCKER ? [
           '--no-sandbox',
