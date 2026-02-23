@@ -81,6 +81,19 @@ export class Cog implements ICogServiceServer {
 
     this.cluster.queue(({ page }) => {
       return new Promise((resolve) => {
+        // Ensure the cluster slot is always released, even when the gRPC connection
+        // drops unexpectedly (e.g. cog-mechanism crash or restart). Without this,
+        // Chrome contexts are never freed and accumulate as zombie processes that
+        // fill the concurrency semaphore and block all new sessions.
+        let resolved = false;
+        const releaseSlot = (reason: string) => {
+          if (!resolved) {
+            resolved = true;
+            console.log(`Releasing cluster slot: ${reason}`);
+            resolve(null);
+          }
+        };
+
         call.on('data', async (runStepRequest: RunStepRequest) => { // tslint:disable-line
           processing = processing + 1;
 
@@ -103,7 +116,7 @@ export class Cog implements ICogServiceServer {
           // If this was the last step to process and the client has ended the stream, then end our
           // stream as well.
           if (processing === 0 && clientEnded) {
-            resolve(null);
+            releaseSlot('stream completed normally');
             call.end();
           }
         });
@@ -113,10 +126,16 @@ export class Cog implements ICogServiceServer {
 
           // Only end the stream if we are done processing all steps.
           if (processing === 0) {
-            resolve(null);
+            releaseSlot('stream ended normally');
             call.end();
           }
         });
+
+        // Release the cluster slot if the client disconnects mid-stream (e.g. cog-mechanism
+        // restarted). The 'close' event fires on unexpected disconnects; 'error' fires on
+        // stream-level protocol errors. Both leave the Promise unresolved without these handlers.
+        call.on('close', () => releaseSlot('client disconnected unexpectedly'));
+        call.on('error', (err: Error) => releaseSlot(`stream error: ${err.message}`));
       });
     });
   }

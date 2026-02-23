@@ -8,7 +8,15 @@ import puppeteerExtra from 'puppeteer-extra';
 import puppeteerExtraPluginRecaptcha from 'puppeteer-extra-plugin-recaptcha';
 const stealthPlugin = require('puppeteer-extra-plugin-stealth'); // needs to use require
 
-const server = new TypedServerOverride();
+// Force gRPC clients to reconnect every 2 minutes so Docker Swarm IPVS round-robin
+// can redistribute workers across web cog replicas. Without this, HTTP/2 multiplexing
+// keeps all calls from a worker pinned to the same replica indefinitely (sticky connections).
+const server = new TypedServerOverride({
+  'grpc.max_connection_age_ms': 120000,
+  'grpc.max_connection_age_grace_ms': 10000,
+  'grpc.keepalive_time_ms': 30000,
+  'grpc.keepalive_timeout_ms': 10000,
+});
 const port = process.env.PORT || 28866;
 const host = process.env.HOST || '0.0.0.0';
 let credentials: grpc.ServerCredentials;
