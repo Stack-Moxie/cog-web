@@ -11,9 +11,15 @@ const stealthPlugin = require('puppeteer-extra-plugin-stealth'); // needs to use
 // Force gRPC clients to reconnect every 2 minutes so Docker Swarm IPVS round-robin
 // can redistribute workers across web cog replicas. Without this, HTTP/2 multiplexing
 // keeps all calls from a worker pinned to the same replica indefinitely (sticky connections).
+//
+// max_connection_age_grace_ms is set to max int32 (effectively infinite) so that
+// in-flight web test streams (NavigateToPage etc.) are never force-closed mid-execution.
+// The GOAWAY is still sent at 2 minutes (preventing new streams on the old connection),
+// but existing streams complete naturally. A 10s grace was causing RST_STREAM errors
+// on any step that took longer than 10s after the 2-minute GOAWAY fired.
 const server = new TypedServerOverride({
   'grpc.max_connection_age_ms': 120000,
-  'grpc.max_connection_age_grace_ms': 10000,
+  'grpc.max_connection_age_grace_ms': 2147483647,
   'grpc.keepalive_time_ms': 30000,
   'grpc.keepalive_timeout_ms': 10000,
 });
