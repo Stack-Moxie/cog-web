@@ -70,7 +70,11 @@ describe('CheckCurrentPageMetaTag', () => {
     protoStep.setData(Struct.fromJavaScript(expectedData));
 
     const response: RunStepResponse = await stepUnderTest.executeStep(protoStep);
+    const messageArgs = response.getMessageArgsList().map(a => a.toJavaScript());
     expect(response.getOutcome()).to.equal(RunStepResponse.Outcome.PASSED);
+    expect(response.getMessageFormat()).to.contain('and its value is %s');
+    expect(messageArgs).to.include(expectedData.expectation);
+    expect(messageArgs).to.include(expectedResult);
   });
 
   it('should pass using "not contain" operator', async () => {
@@ -89,7 +93,11 @@ describe('CheckCurrentPageMetaTag', () => {
     protoStep.setData(Struct.fromJavaScript(expectedData));
 
     const response: RunStepResponse = await stepUnderTest.executeStep(protoStep);
+    const messageArgs = response.getMessageArgsList().map(a => a.toJavaScript());
     expect(response.getOutcome()).to.equal(RunStepResponse.Outcome.PASSED);
+    expect(response.getMessageFormat()).to.contain('and its value is %s');
+    expect(messageArgs).to.include(expectedData.expectation);
+    expect(messageArgs).to.include(expectedResult);
   });
 
   it('should pass using "be" operator', async () => {
@@ -108,7 +116,11 @@ describe('CheckCurrentPageMetaTag', () => {
     protoStep.setData(Struct.fromJavaScript(expectedData));
 
     const response: RunStepResponse = await stepUnderTest.executeStep(protoStep);
+    const messageArgs = response.getMessageArgsList().map(a => a.toJavaScript());
     expect(response.getOutcome()).to.equal(RunStepResponse.Outcome.PASSED);
+    expect(response.getMessageFormat()).to.contain('and its value is %s');
+    expect(messageArgs).to.include(expectedData.expectation);
+    expect(messageArgs).to.include(expectedResult);
   });
 
   it('should pass using "exist" operator', async () => {
@@ -127,6 +139,31 @@ describe('CheckCurrentPageMetaTag', () => {
 
     const response: RunStepResponse = await stepUnderTest.executeStep(protoStep);
     expect(response.getOutcome()).to.equal(RunStepResponse.Outcome.PASSED);
+    expect(response.getMessageFormat()).to.contain('and its value is %s');
+    expect(response.getMessageArgsList().map(a => a.toJavaScript())).to.include(expectedResult);
+  });
+
+  it('should pass using "exist" operator even when a spurious expectation is present', async () => {
+    const expectedResult = 'Anything Not Null';
+    const expectedData = {
+      metaName: 'title',
+      operator: 'exist',
+      expectation: 'some stray value',
+    };
+
+    // Stub a response that matches expectations.
+    clientWrapperStub.waitForNetworkIdle.resolves();
+    clientWrapperStub.getMetaTagContent.resolves(expectedResult);
+
+    // Set step data corresponding to expectations
+    protoStep.setData(Struct.fromJavaScript(expectedData));
+
+    const response: RunStepResponse = await stepUnderTest.executeStep(protoStep);
+    const messageArgs = response.getMessageArgsList().map(a => a.toJavaScript());
+    expect(response.getOutcome()).to.equal(RunStepResponse.Outcome.PASSED);
+    expect(response.getMessageFormat()).to.contain('and its value is %s');
+    expect(messageArgs).to.not.include(expectedData.expectation);
+    expect(messageArgs).to.include(expectedResult);
   });
 
   it('should pass using "not be longer than" operator', async () => {
@@ -145,7 +182,11 @@ describe('CheckCurrentPageMetaTag', () => {
     protoStep.setData(Struct.fromJavaScript(expectedData));
 
     const response: RunStepResponse = await stepUnderTest.executeStep(protoStep);
+    const messageArgs = response.getMessageArgsList().map(a => a.toJavaScript());
     expect(response.getOutcome()).to.equal(RunStepResponse.Outcome.PASSED);
+    expect(response.getMessageFormat()).to.contain('and its value is %s');
+    expect(messageArgs).to.include(expectedData.expectation);
+    expect(messageArgs).to.include(expectedResult);
   });
 
   it('should fail using "contain" operator', async () => {

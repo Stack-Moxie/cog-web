@@ -34,8 +34,12 @@ export class CheckCurrentPageMetaTag extends BaseStep implements StepInterface {
     try {
       await this.client.waitForNetworkIdle(10000, false);
       const actual = await this.client.getMetaTagContent(tag);
-      if (this.runComparison(operator, expectation, actual)) {
-        return this.pass('Meta tag check passed: %s should %s %s', [tag, operator, expectation]);
+      const comparisonResult = this.runComparison(operator, expectation, actual);
+      if (comparisonResult !== false) {
+        if (expectation !== null && operator !== 'exist') {
+          return this.pass('Meta tag check passed: %s should %s %s, and its value is %s', [tag, operator, expectation, comparisonResult]);
+        }
+        return this.pass('Meta tag check passed: %s should %s, and its value is %s', [tag, operator, comparisonResult]);
       }
 
       // Friendlier error messaging for the "exist" operator.
@@ -60,9 +64,9 @@ export class CheckCurrentPageMetaTag extends BaseStep implements StepInterface {
 /**
  * Compare the expected and actual values using the appropriate operator.
  */
-  protected runComparison(operator, expected, actual): boolean {
+  protected runComparison(operator, expected, actual): string | false {
     if (operator === 'exist') {
-      return actual !== null;
+      return actual !== null ? String(actual) : false;
     }
 
     // If we're here, we should throw an error if no meta content was found.
@@ -72,20 +76,20 @@ export class CheckCurrentPageMetaTag extends BaseStep implements StepInterface {
     }
 
     if (operator === 'contain') {
-      return String(actual).toLowerCase().includes(String(expected).toLowerCase());
+      return String(actual).toLowerCase().includes(String(expected).toLowerCase()) ? String(actual) : false;
     }
 
     if (operator === 'not contain') {
-      return !String(actual).toLowerCase().includes(String(expected).toLowerCase());
+      return !String(actual).toLowerCase().includes(String(expected).toLowerCase()) ? String(actual) : false;
     }
 
     if (operator === 'be') {
       // tslint:disable-next-line:triple-equals
-      return expected == actual;
+      return expected == actual ? String(actual) : false;
     }
 
     if (operator === 'not be longer than') {
-      return String(actual).length <= parseInt(expected, 10);
+      return String(actual).length <= parseInt(expected, 10) ? String(actual) : false;
     }
 
     throw new Error(`Unknown check ${operator}. Should be one of: "${[
