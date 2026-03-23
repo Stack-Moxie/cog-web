@@ -16,10 +16,18 @@ export class TakeScreenshot extends BaseStep implements StepInterface {
     const stepData: any = step.getData().toJavaScript();
 
     try {
-      const screenshot = await this.client.client.screenshot({ type: 'jpeg', encoding: 'binary', quality: 40, fullPage: true });
+      const screenshot = await this.client.safeScreenshot({ type: 'jpeg', encoding: 'binary', quality: 40, fullPage: true });
       const binaryRecord = this.binary('showScreenshot', 'Screenshot', 'image/jpeg', screenshot);
       return this.pass('Successfully took a screenshot', [], [binaryRecord]);
     } catch (e) {
+      const isTimeout = e.message && (e.message.includes('timed out') || e.message.includes('captureScreenshot'));
+      if (isTimeout) {
+        return this.error(
+          'Could not take a screenshot: the page appears to have streaming video or another resource keeping Chrome busy. Try pausing or removing media on the page before taking a screenshot.',
+          [],
+          [],
+        );
+      }
       return this.error('There was a problem taking a screenshot: %s', [e.toString()], []);
     }
   }

@@ -38,39 +38,65 @@ export class NavigateToPage extends BaseStep implements StepInterface {
       console.time('time');
       console.log('>>>>> STARTED TIMER FOR NAVIGATE-TO-PAGE STEP');
       await this.client.navigateToUrl(url, throttle, maxInflightRequests);
-      const screenshot = await this.client.client.screenshot({ type: 'jpeg', encoding: 'binary', quality: 60 });
-      const binaryRecord = this.binary('screenshot', 'Screenshot', 'image/jpeg', screenshot);
-      console.log('>>>>> checkpoint 6: finished taking screenshot and making binary record');
+
+      // Stop any streaming media before taking the screenshot. A streaming video
+      // (e.g. a 7.2 Mbps homepage hero video) keeps Chrome's rendering pipeline
+      // busy and causes Page.captureScreenshot to hang indefinitely.
+      // Use a per-call timeout so a busy Chrome fails fast (< protocolTimeout).
+      try {
+        await Promise.race([
+          this.client.client.evaluate(() => {
+            document.querySelectorAll<HTMLMediaElement>('video, audio').forEach(el => {
+              try { el.pause(); el.src = ''; el.load(); } catch (_) {}
+            });
+          }),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('per-call timeout')), 5000)),
+        ]);
+        console.log('>>>>> checkpoint 5.5: stopped streaming media');
+      } catch (stopMediaError) {
+        console.log('>>>>> checkpoint 5.5: could not stop media (non-fatal):', stopMediaError.message);
+      }
+
+      // Take screenshot. Some pages (e.g. those with streaming video) can cause
+      // Page.captureScreenshot to hang indefinitely. We treat a screenshot failure
+      // as non-fatal so a successful navigation still passes.
+      // Use a per-call timeout so a busy Chrome fails fast (< protocolTimeout).
+      let binaryRecord;
+      try {
+        const screenshot = await Promise.race([
+          this.client.client.screenshot({ type: 'jpeg', encoding: 'binary', quality: 60 }),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('per-call timeout')), 8000)),
+        ]);
+        binaryRecord = this.binary('screenshot', 'Screenshot', 'image/jpeg', screenshot);
+        console.log('>>>>> checkpoint 6: finished taking screenshot and making binary record');
+      } catch (screenshotError) {
+        console.log('>>>>> checkpoint 6: screenshot failed (non-fatal):', screenshotError.message);
+      }
       console.timeLog('time');
-      const status = await this.client.client['___lastResponse']['status']();
+
+      const lastResponse = this.client.client['___lastResponse'];
+      const status = lastResponse ? await lastResponse.status() : 200;
       console.log('>>>>> checkpoint 7: finished getting status, ending timer');
       console.timeEnd('time');
       if (status === 404 && !passOn404) {
-        return this.fail('%s returned an Error: 404 Not Found', [url], [binaryRecord]);
+        return this.fail('%s returned an Error: 404 Not Found', [url], binaryRecord ? [binaryRecord] : []);
       }
       const record = this.createRecord(url);
       const orderedRecord = this.createOrderedRecord(url, stepData['__stepOrder']);
-      return this.pass('Successfully navigated to %s', [url], [binaryRecord, record, orderedRecord]);
+      return this.pass('Successfully navigated to %s', [url], binaryRecord ? [binaryRecord, record, orderedRecord] : [record, orderedRecord]);
     } catch (e) {
       try {
         const screenshot = await this.client.client.screenshot({ type: 'jpeg', encoding: 'binary', quality: 60 });
         const binaryRecord = this.binary('screenshot', 'Screenshot', 'image/jpeg', screenshot);
         return this.error(
           'There was a problem navigating to %s: %s',
-          [
-            url,
-            e.toString(),
-          ],
-          [
-            binaryRecord,
-          ]);
+          [url, e.toString()],
+          [binaryRecord],
+        );
       } catch (screenshotError) {
         return this.error(
           'There was a problem navigating to %s: %s',
-          [
-            url,
-            e.toString(),
-          ],
+          [url, e.toString()],
         );
       }
     }

@@ -19,9 +19,9 @@ describe('NavigateToPage', () => {
     // Set up test stubs.
     clientWrapperStub = sinon.stub();
     clientWrapperStub.navigateToUrl = sinon.stub();
+    clientWrapperStub.safeScreenshot = sinon.stub();
+    clientWrapperStub.safeScreenshot.resolves('anyBinary');
     clientWrapperStub.client = sinon.stub();
-    clientWrapperStub.client.screenshot = sinon.stub();
-    clientWrapperStub.client.screenshot.returns('anyBinary');
     clientWrapperStub.client['___lastResponse'] = sinon.stub();
     clientWrapperStub.client['___lastResponse']['status'] = sinon.stub();
     clientWrapperStub.client['___lastResponse']['status'].returns(200);

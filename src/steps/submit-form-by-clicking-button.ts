@@ -47,22 +47,24 @@ export class SubmitFormByClickingButton extends BaseStep implements StepInterfac
       submittedAt = moment.utc(moment()).format(); // Track it on successful submit
       await this.client.submitFormByClickingButton(selector);
 
-      const keyValueRecord = this.keyValue('form', 'Form Metadata', {
-        selector, submittedAt,
-      });
-      const screenshot = await this.client.client.screenshot({ type: 'jpeg', encoding: 'binary', quality: 60 });
-      const binaryRecord = this.binary('screenshot', 'Screenshot', 'image/jpeg', screenshot);
+      const keyValueRecord = this.keyValue('form', 'Form Metadata', { selector, submittedAt });
+      let binaryRecord;
+      try {
+        const screenshot = await this.client.safeScreenshot({ type: 'jpeg', encoding: 'binary', quality: 60 });
+        binaryRecord = this.binary('screenshot', 'Screenshot', 'image/jpeg', screenshot);
+      } catch (_) {}
       const record = this.createRecord(selector, submittedAt);
       const orderedRecord = this.createOrderedRecord(selector, submittedAt, stepData['__stepOrder']);
-      return this.pass('Successfully submitted form by clicking button %s', [selector], [binaryRecord, keyValueRecord, record, orderedRecord]);
+      return this.pass('Successfully submitted form by clicking button %s', [selector], binaryRecord ? [binaryRecord, keyValueRecord, record, orderedRecord] : [keyValueRecord, record, orderedRecord]);
     } catch (e) {
       submittedAt = moment.utc(moment()).format(); // Track it when it fails
-      const screenshot = await this.client.client.screenshot({ type: 'jpeg', encoding: 'binary', quality: 60 });
-      const binaryRecord = this.binary('screenshot', 'Screenshot', 'image/jpeg', screenshot);
-      const keyValueRecord = this.keyValue('form', 'Form Metadata', {
-        selector, submittedAt,
-      });
-      return this.error('There was a problem submitting the form: %s', [e.toString()], [binaryRecord, keyValueRecord]);
+      let binaryRecord;
+      try {
+        const screenshot = await this.client.safeScreenshot({ type: 'jpeg', encoding: 'binary', quality: 60 });
+        binaryRecord = this.binary('screenshot', 'Screenshot', 'image/jpeg', screenshot);
+      } catch (_) {}
+      const keyValueRecord = this.keyValue('form', 'Form Metadata', { selector, submittedAt });
+      return this.error('There was a problem submitting the form: %s', [e.toString()], binaryRecord ? [binaryRecord, keyValueRecord] : [keyValueRecord]);
     }
   }
 

@@ -39,23 +39,25 @@ export class ClickOnElement extends BaseStep implements StepInterface {
         }
       }
       await this.client.clickElement(selector);
-      const screenshot = await this.client.client.screenshot({ type: 'jpeg', encoding: 'binary', quality: 60 });
-      const binaryRecord = this.binary('screenshot', 'Screenshot', 'image/jpeg', screenshot);
+      let binaryRecord;
+      try {
+        const screenshot = await this.client.safeScreenshot({ type: 'jpeg', encoding: 'binary', quality: 60 });
+        binaryRecord = this.binary('screenshot', 'Screenshot', 'image/jpeg', screenshot);
+      } catch (_) {}
       const record = this.createRecord(selector);
       const orderedRecord = this.createOrderedRecord(selector, stepData['__stepOrder']);
-      return this.pass('Successfully clicked element: %s', [selector], [binaryRecord, record, orderedRecord]);
+      return this.pass('Successfully clicked element: %s', [selector], binaryRecord ? [binaryRecord, record, orderedRecord] : [record, orderedRecord]);
     } catch (e) {
-      const screenshot = await this.client.client.screenshot({ type: 'jpeg', encoding: 'binary', quality: 60 });
-      const binaryRecord = this.binary('screenshot', 'Screenshot', 'image/jpeg', screenshot);
+      let binaryRecord;
+      try {
+        const screenshot = await this.client.safeScreenshot({ type: 'jpeg', encoding: 'binary', quality: 60 });
+        binaryRecord = this.binary('screenshot', 'Screenshot', 'image/jpeg', screenshot);
+      } catch (_) {}
       return this.error(
         'There was a problem clicking element %s: %s',
-        [
-          selector,
-          e.toString(),
-        ],
-        [
-          binaryRecord,
-        ]);
+        [selector, e.toString()],
+        binaryRecord ? [binaryRecord] : [],
+      );
     }
   }
 

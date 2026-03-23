@@ -19,9 +19,9 @@ describe('DispatchEvent', () => {
     // Set up test stubs.
     clientWrapperStub = sinon.stub();
     clientWrapperStub.dispatchEvent = sinon.stub();
+    clientWrapperStub.safeScreenshot = sinon.stub();
+    clientWrapperStub.safeScreenshot.resolves('anyBinary');
     clientWrapperStub.client = sinon.stub();
-    clientWrapperStub.client.screenshot = sinon.stub();
-    clientWrapperStub.client.screenshot.returns('anyBinary');
     stepUnderTest = new Step(clientWrapperStub);
     protoStep = new ProtoStep();
   });

@@ -5,6 +5,23 @@ import { keyCodes } from '../_shared/constants/key-codes.constant';
 export class BasicInteractionAware {
   public client: Page;
 
+  /**
+   * Takes a screenshot with a hard per-call timeout so that a busy Chrome
+   * (e.g. one that is decoding a streaming video) never stalls the whole step.
+   * Throws if the screenshot cannot be captured within `timeoutMs`.
+   */
+  public async safeScreenshot(options: any = {}, timeoutMs: number = 8000): Promise<any> {
+    return Promise.race([
+      this.client.screenshot(options),
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error('screenshot timed out — the page may have streaming video or another resource keeping Chrome busy')),
+          timeoutMs,
+        ),
+      ),
+    ]);
+  }
+
   public async focusFrame(domQuerySelector: string) {
     if (domQuerySelector === 'main') {
       this.client['___currentFrame'] = this.client.mainFrame();
@@ -254,10 +271,13 @@ export class BasicInteractionAware {
         latency: 40,
       });
     }
+    // Coerce to number before comparing. YAML/protobuf can deliver the value as
+    // the string "-1" rather than the number -1, causing strict === to fail.
+    const inflightNum = Number(maxInflightRequests);
     let waitUntilSetting: PuppeteerLifeCycleEvent;
-    if (maxInflightRequests === -1) {
+    if (inflightNum === -1) {
       waitUntilSetting = 'domcontentloaded';
-    } else if (maxInflightRequests === 0) {
+    } else if (inflightNum === 0) {
       waitUntilSetting = 'networkidle0';
     } else {
       waitUntilSetting = 'networkidle2';
@@ -272,9 +292,111 @@ export class BasicInteractionAware {
     await this.client.setViewport({ width: 1920, height: 1080 });
     console.log('>>>>> checkpoint 2: finished setting UA and viewport');
     console.timeLog('time');
-    const response = await this.client.goto(url, { waitUntil: waitUntilSetting, timeout: 90000 });
-    console.log('>>>>> RESPONSE:', response);
-    console.log('>>>>> checkpoint 3: finished navigating to page or timed out after 90s');
+
+    // Navigate to about:blank first to ensure any stale page state (from a prior
+    // timed-out navigation on the same page context) is cleared before the real
+    // navigation starts. This prevents queued JS events from a previous attempt
+    // from interfering with the new navigation.
+    try {
+      await this.client.goto('about:blank', { timeout: 5000 });
+      console.log('>>>>> checkpoint 2.5: cleared page with about:blank');
+    } catch (e) {
+      console.log('>>>>> checkpoint 2.5: about:blank navigation failed (non-fatal):', e.message);
+    }
+    console.timeLog('time');
+
+    // Track lifecycle events and the navigation response independently of goto's
+    // internal LifecycleWatcher. This is necessary because Shopify/checkout apps
+    // often perform a same-document navigation (history.pushState/replaceState)
+    // shortly after page load. When that happens, Puppeteer resets its watcher
+    // and waits for a new DOMContentLoaded that never fires — even though the page
+    // loaded successfully. By tracking DCL ourselves, we can catch that timeout and
+    // proceed rather than retrying endlessly.
+    const targetHostname = (() => { try { return new URL(url).hostname; } catch { return url; } })();
+    let domContentLoadedFired = false;
+    let capturedNavResponse: any = null;
+
+    const onResponse = (resp: any) => {
+      const respUrl = resp.url();
+      if (respUrl.includes(targetHostname)) {
+        // Capture only the first top-level document navigation response.
+        // Exclude sub-document resources (web-pixel sandboxes, iframes, etc.)
+        // so capturedNavResponse represents the actual page we navigated to.
+        if (!capturedNavResponse &&
+            resp.request().resourceType() === 'document' &&
+            resp.request().isNavigationRequest()) {
+          capturedNavResponse = resp;
+        }
+      }
+    };
+    const onFrameNavigated = (_frame: any) => {};
+    // Race goto against an early-exit timer that fires shortly after DOMContentLoaded.
+    // Many SPAs (e.g. Shopify storefronts) perform a same-document navigation
+    // (history.pushState) immediately after load, which resets Puppeteer's internal
+    // LifecycleWatcher and causes goto to wait indefinitely for a new DCL event that
+    // never fires. By racing goto against our own DCL-triggered timer, we exit as
+    // soon as the page is functionally loaded, without waiting for the full 90s timeout.
+    //
+    // Grace period heuristic:
+    //   domcontentloaded mode → 3s: DCL fires in ~1s, so we exit at ~4s total.
+    //   networkidle modes     → 12s: gives network time to settle while still
+    //                           capping pages that never reach networkidle.
+    // eslint-disable-next-line prefer-const
+    let earlyExitResolve!: (val: any) => void;
+    const earlyExitPromise = new Promise<any>(resolve => { earlyExitResolve = resolve; });
+
+    const onDCL = () => {
+      domContentLoadedFired = true;
+      console.log('>>>>> PAGE EVENT: domcontentloaded fired');
+      console.timeLog('time');
+      const gracePeriod = waitUntilSetting === 'domcontentloaded' ? 3000 : 12000;
+      setTimeout(() => {
+        console.log(`>>>>> DCL + ${gracePeriod / 1000}s grace period elapsed, exiting navigation early`);
+        console.timeLog('time');
+        earlyExitResolve(capturedNavResponse);
+      }, gracePeriod);
+    };
+    const onLoad = () => {
+      console.log('>>>>> PAGE EVENT: load fired');
+      console.timeLog('time');
+    };
+
+    this.client.on('response', onResponse);
+    this.client.on('framenavigated', onFrameNavigated);
+    this.client.on('domcontentloaded', onDCL);
+    this.client.on('load', onLoad);
+
+    // Run goto with a 90s safety-net timeout. earlyExitPromise will almost always
+    // win the race for pages where DCL fires. Attach a no-op catch on gotoPromise
+    // so its eventual rejection (after 90s) does not become an unhandled rejection.
+    const gotoPromise = this.client.goto(url, { waitUntil: waitUntilSetting, timeout: 90000 });
+    gotoPromise.catch(() => {});
+
+    let response;
+    try {
+      response = await Promise.race([gotoPromise, earlyExitPromise]);
+      if (!response && capturedNavResponse) {
+        response = capturedNavResponse;
+      }
+    } catch (e) {
+      const isNavTimeout = e.message && e.message.includes('Navigation timeout');
+      if (isNavTimeout && domContentLoadedFired) {
+        // 90s safety-net fired before earlyExitPromise (shouldn't normally happen).
+        console.log('>>>>> goto 90s safety-net timed out, but DOMContentLoaded had already fired. Proceeding.');
+        console.timeLog('time');
+        response = capturedNavResponse;
+      } else {
+        throw e;
+      }
+    } finally {
+      this.client.off('response', onResponse);
+      this.client.off('framenavigated', onFrameNavigated);
+      this.client.off('domcontentloaded', onDCL);
+      this.client.off('load', onLoad);
+    }
+
+    console.log('>>>>> RESPONSE:', response ? `${response.status()} ${response.url()}` : 'null');
+    console.log('>>>>> checkpoint 3: finished navigating to page');
     console.timeLog('time');
     // Run solveRecaptchas() as soon as page loads, will automatically solve captchas even if they appear later
     if (process.env.CAPTCHA_TOKEN) {

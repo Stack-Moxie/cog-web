@@ -72,6 +72,7 @@ async function instantiateCluster(): Promise<Cluster> {
       puppeteerOptions: {
         executablePath: process.env.IN_DOCKER ? '/usr/bin/google-chrome' : '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
         headless: false,
+        protocolTimeout: 60000,
         args: process.env.IN_DOCKER ? [
           '--no-sandbox',
           '--disable-setuid-sandbox',

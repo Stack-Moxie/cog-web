@@ -105,6 +105,7 @@ describe('ClientWrapper', () => {
       pageStub.mainFrame = sinon.stub();
       pageStub.addListener = sinon.stub();
       pageStub.on = sinon.stub();
+      pageStub.off = sinon.stub();
       pageStub.removeListener = sinon.stub();
 
       // Stub out event emitter.
@@ -117,7 +118,10 @@ describe('ClientWrapper', () => {
       const expectedUrl = 'https://example.com';
       const originalUserAgent = 'Mozilla/a.b Chrome/x.y.z';
       const expectedUserAgent = 'Mozilla/a.b AutomatonChrome/x.y.z';
-      const expectedLastResponse = 'This would be a puppeteer response object';
+      const expectedLastResponse = {
+        status: sinon.stub().returns(200),
+        url: sinon.stub().returns(expectedUrl),
+      };
 
       // Set up test instance.
       browserStub.userAgent.resolves(originalUserAgent);
@@ -131,7 +135,7 @@ describe('ClientWrapper', () => {
       expect(pageStub.setViewport).to.have.been.calledWith(sinon.match.has('width', 1920));
       expect(pageStub.setViewport).to.have.been.calledWith(sinon.match.has('height', 1080));
       expect(pageStub.goto).to.have.been.calledWith(expectedUrl);
-      expect(pageStub.___lastResponse).to.be.string(expectedLastResponse);
+      expect(pageStub.___lastResponse).to.equal(expectedLastResponse);
     });
 
     it('sadPath', () => {

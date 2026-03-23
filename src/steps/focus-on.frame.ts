@@ -21,23 +21,25 @@ export class FocusOnFrame extends BaseStep implements StepInterface {
 
     try {
       await this.client.focusFrame(iframeSelector);
-      const screenshot = await this.client.client.screenshot({ type: 'jpeg', encoding: 'binary', quality: 60 });
-      const binaryRecord = this.binary('screenshot', 'Screenshot', 'image/jpeg', screenshot);
+      let binaryRecord;
+      try {
+        const screenshot = await this.client.safeScreenshot({ type: 'jpeg', encoding: 'binary', quality: 60 });
+        binaryRecord = this.binary('screenshot', 'Screenshot', 'image/jpeg', screenshot);
+      } catch (_) {}
       const record = this.createRecord(iframeSelector);
       const orderedRecord = this.createOrderedRecord(iframeSelector, stepData['__stepOrder']);
-      return this.pass('Successfully focused on frame %s', [iframeSelector], [binaryRecord, record, orderedRecord]);
+      return this.pass('Successfully focused on frame %s', [iframeSelector], binaryRecord ? [binaryRecord, record, orderedRecord] : [record, orderedRecord]);
     } catch (e) {
-      const screenshot = await this.client.client.screenshot({ type: 'jpeg', encoding: 'binary', quality: 60 });
-      const binaryRecord = this.binary('screenshot', 'Screenshot', 'image/jpeg', screenshot);
+      let binaryRecord;
+      try {
+        const screenshot = await this.client.safeScreenshot({ type: 'jpeg', encoding: 'binary', quality: 60 });
+        binaryRecord = this.binary('screenshot', 'Screenshot', 'image/jpeg', screenshot);
+      } catch (_) {}
       return this.error(
         'Unable to focus on frame %s, the frame may no longer exist on the page: %s',
-        [
-          iframeSelector,
-          e.toString(),
-        ],
-        [
-          binaryRecord,
-        ]);
+        [iframeSelector, e.toString()],
+        binaryRecord ? [binaryRecord] : [],
+      );
     }
   }
 
