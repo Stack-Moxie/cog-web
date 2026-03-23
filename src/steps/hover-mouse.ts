@@ -20,21 +20,23 @@ export class HoverMouse extends BaseStep implements StepInterface {
 
     try {
       await this.client.hoverMouse(domQuerySelector);
-      const screenshot = await this.client.client.screenshot({ type: 'jpeg', encoding: 'binary', quality: 60 });
-      const binaryRecord = this.binary('screenshot', 'Screenshot', 'image/jpeg', screenshot);
-      return this.pass('Successfully hovered to %s', [domQuerySelector], [binaryRecord]);
+      let binaryRecord;
+      try {
+        const screenshot = await this.client.safeScreenshot({ type: 'jpeg', encoding: 'binary', quality: 60 });
+        binaryRecord = this.binary('screenshot', 'Screenshot', 'image/jpeg', screenshot);
+      } catch (_) {}
+      return this.pass('Successfully hovered to %s', [domQuerySelector], binaryRecord ? [binaryRecord] : []);
     } catch (e) {
-      const screenshot = await this.client.client.screenshot({ type: 'jpeg', encoding: 'binary', quality: 60 });
-      const binaryRecord = this.binary('screenshot', 'Screenshot', 'image/jpeg', screenshot);
+      let binaryRecord;
+      try {
+        const screenshot = await this.client.safeScreenshot({ type: 'jpeg', encoding: 'binary', quality: 60 });
+        binaryRecord = this.binary('screenshot', 'Screenshot', 'image/jpeg', screenshot);
+      } catch (_) {}
       return this.error(
         'There was a problem hovering to key %s: %s',
-        [
-          domQuerySelector,
-          e.toString(),
-        ],
-        [
-          binaryRecord,
-        ]);
+        [domQuerySelector, e.toString()],
+        binaryRecord ? [binaryRecord] : [],
+      );
     }
   }
 

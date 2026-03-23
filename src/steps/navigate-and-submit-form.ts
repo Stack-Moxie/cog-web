@@ -38,41 +38,34 @@ export class NavigateAndSubmitForm extends BaseStep implements StepInterface {
       console.time('time');
       console.log('>>>>> STARTED TIMER FOR NAVIGATE-AND-SUBMIT-FORM STEP');
       await this.client.navigateToUrl(url, throttle, maxInflightRequests);
-      const screenshot = await this.client.client.screenshot({ type: 'jpeg', encoding: 'binary', quality: 60 });
-      const binaryRecord = this.binary('screenshot', 'Screenshot', 'image/jpeg', screenshot);
+      let binaryRecord;
+      try {
+        const screenshot = await this.client.safeScreenshot({ type: 'jpeg', encoding: 'binary', quality: 60 });
+        binaryRecord = this.binary('screenshot', 'Screenshot', 'image/jpeg', screenshot);
+      } catch (_) {}
       console.log('>>>>> checkpoint 6: finished taking screenshot and making binary record');
       console.timeLog('time');
-      const status = await this.client.client['___lastResponse']['status']();
+      const lastResponse = this.client.client['___lastResponse'];
+      const status = lastResponse ? await lastResponse.status() : 200;
       console.log('>>>>> checkpoint 7: finished getting status, ending timer');
       console.timeEnd('time');
       if (status === 404 && !passOn404) {
-        return this.fail('%s returned an Error: 404 Not Found', [url], [binaryRecord]);
+        return this.fail('%s returned an Error: 404 Not Found', [url], binaryRecord ? [binaryRecord] : []);
       }
       const record = this.createRecord(url);
       const orderedRecord = this.createOrderedRecord(url, stepData['__stepOrder']);
-      return this.pass('Successfully navigated to %s', [url], [binaryRecord, record, orderedRecord]);
+      return this.pass('Successfully navigated to %s', [url], binaryRecord ? [binaryRecord, record, orderedRecord] : [record, orderedRecord]);
     } catch (e) {
+      let binaryRecord;
       try {
-        const screenshot = await this.client.client.screenshot({ type: 'jpeg', encoding: 'binary', quality: 60 });
-        const binaryRecord = this.binary('screenshot', 'Screenshot', 'image/jpeg', screenshot);
-        return this.error(
-          'There was a problem navigating to %s: %s',
-          [
-            url,
-            e.toString(),
-          ],
-          [
-            binaryRecord,
-          ]);
-      } catch (screenshotError) {
-        return this.error(
-          'There was a problem navigating to %s: %s',
-          [
-            url,
-            e.toString(),
-          ],
-        );
-      }
+        const screenshot = await this.client.safeScreenshot({ type: 'jpeg', encoding: 'binary', quality: 60 });
+        binaryRecord = this.binary('screenshot', 'Screenshot', 'image/jpeg', screenshot);
+      } catch (_) {}
+      return this.error(
+        'There was a problem navigating to %s: %s',
+        [url, e.toString()],
+        binaryRecord ? [binaryRecord] : [],
+      );
     }
   }
 

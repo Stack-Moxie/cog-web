@@ -68,28 +68,28 @@ export class DispatchEvent extends BaseStep implements StepInterface {
 
     try {
       await this.client.dispatchEvent(selector, eventType, eventOptions);
-      const screenshot = await this.client.client.screenshot({ type: 'jpeg', encoding: 'binary', quality: 60 });
-      const binaryRecord = this.binary('screenshot', 'Screenshot', 'image/jpeg', screenshot);
+      let binaryRecord;
+      try {
+        const screenshot = await this.client.safeScreenshot({ type: 'jpeg', encoding: 'binary', quality: 60 });
+        binaryRecord = this.binary('screenshot', 'Screenshot', 'image/jpeg', screenshot);
+      } catch (_) {}
       const record = this.createRecord(selector, eventType, stepData.eventOptions);
       const orderedRecord = this.createOrderedRecord(selector, eventType, stepData.eventOptions, stepData['__stepOrder']);
       return this.pass(
         'Successfully dispatched %s event on element: %s',
         [eventType, selector],
-        [binaryRecord, record, orderedRecord],
+        binaryRecord ? [binaryRecord, record, orderedRecord] : [record, orderedRecord],
       );
     } catch (e) {
-      const screenshot = await this.client.client.screenshot({ type: 'jpeg', encoding: 'binary', quality: 60 });
-      const binaryRecord = this.binary('screenshot', 'Screenshot', 'image/jpeg', screenshot);
+      let binaryRecord;
+      try {
+        const screenshot = await this.client.safeScreenshot({ type: 'jpeg', encoding: 'binary', quality: 60 });
+        binaryRecord = this.binary('screenshot', 'Screenshot', 'image/jpeg', screenshot);
+      } catch (_) {}
       return this.error(
         'There was a problem dispatching %s event on element %s: %s',
-        [
-          eventType,
-          selector,
-          e.toString(),
-        ],
-        [
-          binaryRecord,
-        ],
+        [eventType, selector, e.toString()],
+        binaryRecord ? [binaryRecord] : [],
       );
     }
   }

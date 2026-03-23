@@ -18,9 +18,8 @@ describe('TakeScreenshot', () => {
   beforeEach(() => {
     // Set up test stubs.
     clientWrapperStub = sinon.stub();
-    clientWrapperStub.client = sinon.stub();
-    clientWrapperStub.client.screenshot = sinon.stub();
-    clientWrapperStub.client.screenshot.returns('anyBinary');
+    clientWrapperStub.safeScreenshot = sinon.stub();
+    clientWrapperStub.safeScreenshot.resolves('anyBinary');
     stepUnderTest = new Step(clientWrapperStub);
     protoStep = new ProtoStep();
   });
@@ -44,7 +43,7 @@ describe('TakeScreenshot', () => {
 
       it('should call screenshot to with expectedArgs', async () => {
         await stepUnderTest.executeStep(protoStep);
-        expect(clientWrapperStub.client.screenshot).to.have.been.calledWith({ type: 'jpeg', encoding: 'binary', quality: 40, fullPage: true });
+        expect(clientWrapperStub.safeScreenshot).to.have.been.calledWith({ type: 'jpeg', encoding: 'binary', quality: 40, fullPage: true });
       });
 
       it('should respond with pass', async () => {
@@ -56,7 +55,7 @@ describe('TakeScreenshot', () => {
     describe('Screenshot to did not occur', () => {
       beforeEach(() => {
         protoStep.setData(Struct.fromJavaScript({__stepOrder: 2}));
-        clientWrapperStub.client.screenshot.throws();
+        clientWrapperStub.safeScreenshot.rejects(new Error('screenshot timed out'));
       });
 
       it('should respond with error', async () => {

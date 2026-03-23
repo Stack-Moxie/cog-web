@@ -42,24 +42,25 @@ export class EnterValueIntoField extends BaseStep implements StepInterface {
     // Determine how to fill out the field, and then try.
     try {
       await this.client.fillOutField(selector, value);
-      const screenshot = await this.client.client.screenshot({ type: 'jpeg', encoding: 'binary', quality: 60 });
-      const binaryRecord = this.binary('screenshot', 'Screenshot', 'image/jpeg', screenshot);
+      let binaryRecord;
+      try {
+        const screenshot = await this.client.safeScreenshot({ type: 'jpeg', encoding: 'binary', quality: 60 });
+        binaryRecord = this.binary('screenshot', 'Screenshot', 'image/jpeg', screenshot);
+      } catch (_) {}
       const record = this.createRecord(selector, value);
       const orderedRecord = this.createOrderedRecord(selector, value, stepData['__stepOrder']);
-      return this.pass('Successfully filled out %s with %s', [selector, value], [binaryRecord, record, orderedRecord]);
+      return this.pass('Successfully filled out %s with %s', [selector, value], binaryRecord ? [binaryRecord, record, orderedRecord] : [record, orderedRecord]);
     } catch (e) {
-      const screenshot = await this.client.client.screenshot({ type: 'jpeg', encoding: 'binary', quality: 60, fullPage: true });
-      const binaryRecord = this.binary('screenshot', 'Screenshot', 'image/jpeg', screenshot);
+      let binaryRecord;
+      try {
+        const screenshot = await this.client.safeScreenshot({ type: 'jpeg', encoding: 'binary', quality: 60, fullPage: true });
+        binaryRecord = this.binary('screenshot', 'Screenshot', 'image/jpeg', screenshot);
+      } catch (_) {}
       return this.error(
         'There was a problem filling out %s with %s: %s',
-        [
-          selector,
-          value,
-          e.toString(),
-        ],
-        [
-          binaryRecord,
-        ]);
+        [selector, value, e.toString()],
+        binaryRecord ? [binaryRecord] : [],
+      );
     }
   }
 
