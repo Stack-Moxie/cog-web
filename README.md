@@ -28,6 +28,18 @@ $ crank cog:install stackmoxie/web
 This Cog does not require any authentication details.
 <!-- authenticationDetailsEnd -->
 
+### Environment Variables
+
+The following environment variables can be set (e.g. in a `.env` file at the
+root of this repository) to enable optional or AI-powered features.
+
+| Variable | Required For | Description |
+| --- | --- | --- |
+| `AZURE_OPENAI_ENDPOINT` | `NavigateAndSubmitFormWithAI` | Azure OpenAI resource endpoint (e.g. `https://my-resource.cognitiveservices.azure.com/`) |
+| `AZURE_OPENAI_API_KEY` | `NavigateAndSubmitFormWithAI` | API key for the Azure OpenAI resource |
+| `AZURE_OPENAI_DEPLOYMENT_NAME` | `NavigateAndSubmitFormWithAI` | Name of the GPT-4o (Vision) deployment to use (e.g. `gpt-4o`) |
+| `REDIS_URL` | `NavigateAndSubmitFormWithAI` (`hash` strategy) | Redis connection string used to cache AI-generated form fill actions across runs. When omitted the step still works — it just calls the AI on every run. |
+
 ### Steps
 <!-- stepDetails -->
 | Name (ID) | Expression | Expected Data |
@@ -50,6 +62,7 @@ This Cog does not require any authentication details.
 | **Scroll to a percentage depth of a web page**<br>(`ScrollTo`) | `scroll to (?<depth>\d+)% of the page` | - `depth`: Percent Depth |
 | **Submit a form by clicking a button**<br>(`SubmitFormByClickingButton`) | `submit the form by clicking (?<domQuerySelector>.+)` | - `domQuerySelector`: Button's DOM Query Selector |
 | **Check all network requests**<br>(`CheckAllNetworkRequestsStep`) | `there should be network requests from the page` | - `none` |
+| **Navigate and submit form with AI**<br>(`NavigateAndSubmitFormWithAI`) | `navigate and fill a form at (?<webPageUrl>.+) using AI` | - `webPageUrl`: Page URL <br><br>- `fieldOverrides` *(optional)*: Map of specific field values to enforce (matched by label, name, or placeholder), e.g. `Country → U.S.A.`, `State → Georgia`. All other fields are filled with realistic dummy data. <br><br>- `maxAttempts` *(optional)*: Maximum number of AI retry attempts if the form is not detected as submitted (default `2`, max `3`). On each retry the current page state and visible errors are sent back to the AI. <br><br>- `cacheStrategy` *(optional)*: Controls how AI call costs are managed across repeated runs. `hash` *(default)* — caches fill actions in Redis and re-runs AI only when the form structure changes. `promote` — on first success rewrites the scenario with concrete `EnterValueIntoField` steps so future runs use no AI at all (and fail if the form changes). `always` — always calls the AI, ignoring any cached result. Requires `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, and `AZURE_OPENAI_DEPLOYMENT_NAME` environment variables. |
 <!-- stepDetailsEnd -->
 
 ## Development and Contributing
@@ -62,8 +75,12 @@ as appropriate.
 1. Install node.js (v10.x+ recommended)
 2. Clone this repository.
 3. Install dependencies via `npm install`
-4. Run `npm start` to validate the Cog works locally (`ctrl+c` to kill it)
-5. Run `crank cog:install --source=local --local-start-command="npm start"` to
+4. *(Optional)* Copy `.env.example` to `.env` and fill in your Azure OpenAI and
+   Redis credentials to enable the `NavigateAndSubmitFormWithAI` step locally.
+   See the [Environment Variables](#environment-variables) section above for the
+   full list of supported variables.
+5. Run `npm start` to validate the Cog works locally (`ctrl+c` to kill it)
+6. Run `crank cog:install --source=local --local-start-command="npm start"` to
    register your local instance of this Cog. You may need to append a `--force`
    flag or run `crank cog:uninstall stackmoxie/web` if you've already
    installed the distributed version of this Cog.

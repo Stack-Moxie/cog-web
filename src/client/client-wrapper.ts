@@ -14,7 +14,7 @@ class ClientWrapper {
   public marketoConnected: boolean = false;
   public delayInSeconds: number;
 
-  constructor (page: Page, auth: grpc.Metadata, idMap: any, delayInSeconds = 3) {
+  constructor (page: Page, auth: grpc.Metadata, idMap: any, delayInSeconds = 3, public redisClient: any = null) {
     this.client = page;
     this.idMap = idMap;
 
