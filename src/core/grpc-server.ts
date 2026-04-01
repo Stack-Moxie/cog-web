@@ -1,3 +1,5 @@
+import * as dotenv from 'dotenv';
+dotenv.config();
 import * as grpc from '@grpc/grpc-js';
 import { Cluster } from 'puppeteer-cluster';
 import { CogServiceService as CogService } from '../proto/cog_grpc_pb';
@@ -30,6 +32,16 @@ const server = new TypedServerOverride({
 });
 const port = process.env.PORT || 28866;
 const host = process.env.HOST || '0.0.0.0';
+const redisUrl = process.env.REDIS_URL || null;
+let redisClient: any = null;
+
+if (redisUrl) {
+  const redis = require('redis');
+  redisClient = redis.createClient(redisUrl);
+  redisClient.on('error', (err: Error) => console.log('[cog-web Redis] Connection error:', err));
+  redisClient.on('connect', () => console.log('[cog-web Redis] Connected'));
+}
+
 let credentials: grpc.ServerCredentials;
 
 if (process.env.USE_SSL) {
@@ -96,7 +108,7 @@ async function instantiateCluster(): Promise<Cluster> {
 
 instantiateCluster().then((cluster) => {
   console.log('Adding service to gRPC server...');
-  server.addServiceTyped(CogService, new Cog(cluster, ClientWrapper, {}));
+  server.addServiceTyped(CogService, new Cog(cluster, ClientWrapper, {}, redisClient));
 
   console.log(`Binding gRPC server to ${host}:${port}...`);
   server.bindAsync(`${host}:${port}`, credentials, (err, port) => {
