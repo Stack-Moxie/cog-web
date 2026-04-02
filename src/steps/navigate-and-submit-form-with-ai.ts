@@ -148,9 +148,16 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
 
       if (cached) {
         if (cached.formHash === formHash) {
-          console.log(`[AI-Step] Cache HIT — executing ${cached.fillActions.length} cached actions for ${url}`);
+          const nonClickActions = cached.fillActions.filter(a => a.inputType !== 'click');
+          const clickActions = cached.fillActions.filter(a => a.inputType === 'click');
+          const overrideCount = Object.keys(fieldOverrides).length;
+          console.log(`[AI-Step] Cache HIT — executing ${cached.fillActions.length} cached actions for ${url}${overrideCount > 0 ? ` (applying ${overrideCount} fieldOverride(s) via DOM)` : ''}`);
           try {
-            await this.executeFillActions(cached.fillActions);
+            await this.executeFillActions(nonClickActions);
+            if (overrideCount > 0) {
+              await this.applyOverridesToPage(fieldOverrides);
+            }
+            await this.executeFillActions(clickActions);
             await this.sleep(1500);
             const screenshot = await this.safeCapture();
             const records = this.buildRecords(url, cached.fillActions.length, 0, true, cacheStrategy, cached.fillActions, screenshot, stepOrder);
@@ -275,6 +282,74 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
   }
 
   // ── Private helpers ──────────────────────────────────────────────────────────
+
+  /**
+   * For each override key, finds the matching form field on the live page via
+   * DOM inspection (checking name, id, placeholder, and label text) and
+   * re-fills it with the override value. This is called after the cached fill
+   * actions have already run, so it acts as a guaranteed second-pass correction
+   * that is independent of the selector format the AI happened to use.
+   */
+  private async applyOverridesToPage(overrides: Record<string, string>): Promise<void> {
+    for (const [key, value] of Object.entries(overrides)) {
+      try {
+        const selector = await this.resolveFieldSelectorByKey(key);
+        if (selector) {
+          // Clear any value the cached fill already placed in this field.
+          // fillOutField uses page.type() which appends, so we must wipe first.
+          await this.client.client.evaluate((sel: string) => {
+            const el = document.querySelector(sel) as HTMLInputElement;
+            if (el && 'value' in el) {
+              el.value = '';
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+              el.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+          }, selector);
+          await this.client.fillOutField(selector, value);
+        } else {
+          console.log(`[AI-Step] Override: no field matched key "${key}" on the page — skipping`);
+        }
+      } catch (err) {
+        console.log(`[AI-Step] Override fill failed for key "${key}": ${err}`);
+      }
+    }
+  }
+
+  /**
+   * Evaluates the page DOM to find a form field matching the given key.
+   * Checks (in order): name attribute, id attribute, placeholder text, and
+   * associated label text — all compared case-insensitively with punctuation
+   * stripped. Returns a minimal CSS selector for the matched element, or null.
+   */
+  private async resolveFieldSelectorByKey(key: string): Promise<string | null> {
+    const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+    return await this.client.client.evaluate((normKey: string) => {
+      const norm = (s: string) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const matches = (a: string) => !!a && (a === normKey || a.includes(normKey) || normKey.includes(a));
+      const fields = Array.from(
+        document.querySelectorAll('form input:not([type="hidden"]), form select, form textarea'),
+      ) as HTMLInputElement[];
+
+      for (const el of fields) {
+        let labelText = '';
+        if (el.id) {
+          const label = document.querySelector(`label[for="${el.id}"]`);
+          if (label) labelText = norm(label.textContent || '');
+        }
+
+        if (
+          matches(norm(el.name)) ||
+          matches(norm(el.id)) ||
+          matches(norm((el as any).placeholder || '')) ||
+          matches(labelText)
+        ) {
+          if (el.name) return `[name="${el.name}"]`;
+          if (el.id) return `#${el.id}`;
+        }
+      }
+      return null;
+    }, normalizedKey) as string | null;
+  }
 
   private async executeFillActions(actions: AiFillAction[]): Promise<void> {
     for (let i = 0; i < actions.length; i++) {

@@ -179,6 +179,90 @@ describe('NavigateAndSubmitFormWithAI', () => {
     expect(response.getMessageFormat()).to.include('Redis cache');
   });
 
+  // ── Cache HIT: fieldOverrides applied via DOM (two-pass) ─────────────────────
+
+  it('should apply fieldOverrides via DOM after cached fill, ignoring cached dummy values', async () => {
+    // Cache contains a dummy email value; override should replace it
+    const cachedActions: AiFillAction[] = [
+      { selector: '#fn', value: 'old@example.com', inputType: 'text' },   // opaque selector
+      { selector: 'button[type="submit"]', value: 'submit', inputType: 'click' },
+    ];
+    cacheGetStub.resolves({ formHash: FINGERPRINT_HASH, fillActions: cachedActions });
+
+    // Third evaluate call is resolveFieldSelectorByKey('email') → returns a DOM selector
+    clientWrapperStub.client.evaluate = sinon.stub()
+      .onFirstCall().resolves('<form><input name="email" id="email" type="email"></form>')
+      .onSecondCall().resolves(FINGERPRINT)
+      .onThirdCall().resolves('[name="email"]')   // resolveFieldSelectorByKey
+      .resolves(false);
+
+    protoStep.setData(Struct.fromJavaScript({
+      webPageUrl: 'https://example.com/form',
+      fieldOverrides: { email: 'overridden@example.com' },
+    }));
+
+    const response: RunStepResponse = await stepUnderTest.executeStep(protoStep);
+
+    expect(response.getOutcome()).to.equal(RunStepResponse.Outcome.PASSED);
+    expect(getFillActionsStub).to.not.have.been.called;
+    // The DOM-resolved selector is used with the override value
+    expect(clientWrapperStub.fillOutField).to.have.been.calledWith('[name="email"]', 'overridden@example.com');
+  });
+
+  it('should fill unmatched cached fields with their original values and only override matched fields', async () => {
+    const cachedActions: AiFillAction[] = [
+      { selector: 'input[name="firstName"]', value: 'Alex', inputType: 'text' },
+      { selector: 'input[name="email"]', value: 'old@example.com', inputType: 'text' },
+      { selector: 'button[type="submit"]', value: 'submit', inputType: 'click' },
+    ];
+    cacheGetStub.resolves({ formHash: FINGERPRINT_HASH, fillActions: cachedActions });
+
+    // Third evaluate call: resolveFieldSelectorByKey('email')
+    clientWrapperStub.client.evaluate = sinon.stub()
+      .onFirstCall().resolves('<form>...</form>')
+      .onSecondCall().resolves(FINGERPRINT)
+      .onThirdCall().resolves('[name="email"]')
+      .resolves(false);
+
+    protoStep.setData(Struct.fromJavaScript({
+      webPageUrl: 'https://example.com/form',
+      fieldOverrides: { email: 'overridden@example.com' },
+    }));
+
+    await stepUnderTest.executeStep(protoStep);
+
+    // Override applied for email
+    expect(clientWrapperStub.fillOutField).to.have.been.calledWith('[name="email"]', 'overridden@example.com');
+    // firstName untouched — cached dummy value used
+    expect(clientWrapperStub.fillOutField).to.have.been.calledWith('input[name="firstName"]', 'Alex');
+  });
+
+  it('should skip override and still submit when no DOM field matches the override key', async () => {
+    const cachedActions: AiFillAction[] = [
+      { selector: 'button[type="submit"]', value: 'submit', inputType: 'click' },
+    ];
+    cacheGetStub.resolves({ formHash: FINGERPRINT_HASH, fillActions: cachedActions });
+
+    // resolveFieldSelectorByKey returns null (no matching field found)
+    clientWrapperStub.client.evaluate = sinon.stub()
+      .onFirstCall().resolves('<form>...</form>')
+      .onSecondCall().resolves(FINGERPRINT)
+      .onThirdCall().resolves(null)   // resolveFieldSelectorByKey → no match
+      .resolves(false);
+
+    protoStep.setData(Struct.fromJavaScript({
+      webPageUrl: 'https://example.com/form',
+      fieldOverrides: { unknownField: 'some-value' },
+    }));
+
+    await stepUnderTest.executeStep(protoStep);
+
+    // Submit button still invoked even though override found no matching field
+    expect(clientWrapperStub.submitFormByClickingButton).to.have.been.calledWith('button[type="submit"]');
+    // fillOutField was never called (no non-click cached actions, no matched override)
+    expect(clientWrapperStub.fillOutField).to.not.have.been.called;
+  });
+
   // ── Cache: STALE → re-runs AI and updates cache ───────────────────────────────
 
   it('should re-run AI and update cache when form hash is stale (cache STALE)', async () => {
