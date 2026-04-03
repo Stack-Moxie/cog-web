@@ -470,7 +470,10 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
     // rewrite this scenario with deterministic steps on subsequent runs.
     if (cacheStrategy === 'promote' && fillActions.length > 0) {
       const promotedSteps = this.buildPromotedSteps(url, fillActions);
-      records.push(this.keyValue('promotedSteps', 'Promoted Concrete Steps', {
+      // The 'exposeOnPass:' prefix tells the cog-mechanism's StepResponse.fromProto
+      // to keep this record in the run log even when the step outcome is Passed.
+      // Without it, all non-allowlisted records are stripped before the log is saved.
+      records.push(this.keyValue('exposeOnPass:promotedSteps', 'Promoted Concrete Steps', {
         stepsJson: JSON.stringify(promotedSteps),
       }));
     }
