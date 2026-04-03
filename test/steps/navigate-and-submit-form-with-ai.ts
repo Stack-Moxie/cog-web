@@ -367,7 +367,7 @@ describe('NavigateAndSubmitFormWithAI', () => {
 
     expect(response.getOutcome()).to.equal(RunStepResponse.Outcome.PASSED);
     const recordIds = response.getRecordsList().map((r: any) => r.getId());
-    expect(recordIds).to.include('promotedSteps');
+    expect(recordIds).to.include('exposeOnPass:promotedSteps');
   });
 
   it('should not include a promotedSteps record for the default hash strategy', async () => {
@@ -377,7 +377,7 @@ describe('NavigateAndSubmitFormWithAI', () => {
 
     expect(response.getOutcome()).to.equal(RunStepResponse.Outcome.PASSED);
     const recordIds = response.getRecordsList().map((r: any) => r.getId());
-    expect(recordIds).to.not.include('promotedSteps');
+    expect(recordIds).to.not.include('exposeOnPass:promotedSteps');
   });
 
   // ── Click error swallowed (navigation race) ───────────────────────────────────
