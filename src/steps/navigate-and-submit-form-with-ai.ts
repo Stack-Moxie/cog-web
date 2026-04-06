@@ -33,7 +33,13 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
     {
       field: 'cacheStrategy',
       type: FieldDefinition.Type.STRING,
-      description: '"hash" (default — Redis cache, re-runs AI only when form changes), "promote" (rewrites scenario with concrete steps on first success), "always" (always calls AI)',
+      description: '"hash" (default — Redis cache, re-runs AI only when form changes) or "promote" (rewrites scenario with concrete steps on first success)',
+      optionality: FieldDefinition.Optionality.OPTIONAL,
+    },
+    {
+      field: 'userHint',
+      type: FieldDefinition.Type.STRING,
+      description: 'Optional additional instructions for the AI about this specific form (e.g. "Click the Contact Us tab first to reveal the form" or "Select Country before the State dropdown appears"). Must relate to form interaction only.',
       optionality: FieldDefinition.Optionality.OPTIONAL,
     },
   ];
@@ -56,18 +62,31 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
   async executeStep(step: Step): Promise<RunStepResponse> {
     const stepData: any = step.getData().toJavaScript();
     const url: string = stepData.webPageUrl;
-    const cacheStrategy: string = stepData.cacheStrategy || 'hash';
     const maxAttempts: number = Math.min(Math.max(parseInt(stepData.maxAttempts) || 2, 1), 3);
     const stepOrder: number = stepData['__stepOrder'] || 1;
+
+    // Only 'hash' and 'promote' are supported. 'always' was removed to prevent
+    // unbounded AI spend; anything else is silently normalised to 'hash'.
+    const rawStrategy: string = stepData.cacheStrategy || 'hash';
+    const cacheStrategy: string = ['hash', 'promote'].includes(rawStrategy) ? rawStrategy : 'hash';
+    if (rawStrategy !== cacheStrategy) {
+      console.log(`[AI-Step] Unsupported cacheStrategy "${rawStrategy}" — falling back to "hash"`);
+    }
 
     // MAP fields are delivered as plain JS objects by the proto Struct deserializer
     const fieldOverrides: Record<string, string> = (stepData.fieldOverrides && typeof stepData.fieldOverrides === 'object')
       ? stepData.fieldOverrides
       : {};
 
+    // Sanitize the user-supplied hint before it reaches the AI.
+    const userHint: string = AiFormFill.sanitizeUserHint(stepData.userHint || '');
+    if (stepData.userHint && !userHint) {
+      console.log('[AI-Step] userHint was provided but contained disallowed content and was ignored.');
+    }
+
     const requestorId: string = (this.client.idMap && this.client.idMap.requestorId) || 'unknown';
 
-    console.log(`[AI-Step] NavigateAndSubmitFormWithAI — url=${url} strategy=${cacheStrategy} maxAttempts=${maxAttempts} requestorId=${requestorId}`);
+    console.log(`[AI-Step] NavigateAndSubmitFormWithAI — url=${url} strategy=${cacheStrategy} maxAttempts=${maxAttempts} requestorId=${requestorId}${userHint ? ' (userHint provided)' : ''}`);
 
     // ── Step 1: Navigate ────────────────────────────────────────────────────────
     // Start the 'time' label expected by basic-interaction.ts checkpoints.
@@ -224,7 +243,7 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
         }
 
         console.log(`[AI-Step] Calling AI — attempt ${attempt}/${maxAttempts} for ${url}`);
-        const result = await aiHelper.getFillActions(initialScreenshot, formHtml, fieldOverrides, messages);
+        const result = await aiHelper.getFillActions(initialScreenshot, formHtml, fieldOverrides, messages, userHint);
         messages = result.messages;
         fillActions = result.actions;
 
