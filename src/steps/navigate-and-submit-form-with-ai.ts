@@ -377,6 +377,23 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
         if (action.inputType === 'click') {
           await this.client.submitFormByClickingButton(action.selector);
         } else {
+          // Clear the field before filling — fillOutField uses page.type() which
+          // appends to any existing value, causing doubled values on retries.
+          // This is safe for all input types: text, email, tel, password, textarea.
+          // Checkboxes and radios don't have a .value that page.type() appends to,
+          // so clearing is a no-op for them.
+          try {
+            await this.client.client.evaluate((sel: string) => {
+              const el = document.querySelector(sel) as HTMLInputElement;
+              if (el && 'value' in el && el.type !== 'checkbox' && el.type !== 'radio') {
+                el.value = '';
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+              }
+            }, action.selector);
+          } catch (_) {
+            // Non-fatal — proceed with fill even if clear fails
+          }
           await this.client.fillOutField(action.selector, action.value);
         }
       } catch (actionErr) {

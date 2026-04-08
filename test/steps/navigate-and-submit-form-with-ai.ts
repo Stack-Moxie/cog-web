@@ -189,11 +189,14 @@ describe('NavigateAndSubmitFormWithAI', () => {
     ];
     cacheGetStub.resolves({ formHash: FINGERPRINT_HASH, fillActions: cachedActions });
 
-    // Third evaluate call is resolveFieldSelectorByKey('email') → returns a DOM selector
+    // executeFillActions now clears each non-click field before filling (one extra evaluate
+    // per non-click action). The single non-click cached action (#fn) adds call 3.
+    // resolveFieldSelectorByKey('email') is therefore call 4.
     clientWrapperStub.client.evaluate = sinon.stub()
       .onFirstCall().resolves('<form><input name="email" id="email" type="email"></form>')
       .onSecondCall().resolves(FINGERPRINT)
-      .onThirdCall().resolves('[name="email"]')   // resolveFieldSelectorByKey
+      .onThirdCall().resolves(undefined)           // clear '#fn' in executeFillActions (non-click cached action)
+      .onCall(3).resolves('[name="email"]')        // resolveFieldSelectorByKey('email')
       .resolves(false);
 
     protoStep.setData(Struct.fromJavaScript({
@@ -217,11 +220,15 @@ describe('NavigateAndSubmitFormWithAI', () => {
     ];
     cacheGetStub.resolves({ formHash: FINGERPRINT_HASH, fillActions: cachedActions });
 
-    // Third evaluate call: resolveFieldSelectorByKey('email')
+    // executeFillActions now clears each non-click field before filling. The two non-click
+    // cached actions (firstName, email) add calls 3 and 4. resolveFieldSelectorByKey('email')
+    // is therefore call 5.
     clientWrapperStub.client.evaluate = sinon.stub()
       .onFirstCall().resolves('<form>...</form>')
       .onSecondCall().resolves(FINGERPRINT)
-      .onThirdCall().resolves('[name="email"]')
+      .onThirdCall().resolves(undefined)           // clear 'input[name="firstName"]' in executeFillActions
+      .onCall(3).resolves(undefined)               // clear 'input[name="email"]' in executeFillActions
+      .onCall(4).resolves('[name="email"]')        // resolveFieldSelectorByKey('email')
       .resolves(false);
 
     protoStep.setData(Struct.fromJavaScript({
