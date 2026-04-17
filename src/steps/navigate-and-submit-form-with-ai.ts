@@ -358,7 +358,7 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         if (attempt > 1) {
-          const alreadySubmitted = await this.detectSuccess(preSubmitUrl);
+          const alreadySubmitted = await this.detectSuccess(preSubmitUrl, (fillActions || []).map(a => a.selector));
           if (alreadySubmitted) {
             console.log(`[AI-Step] Late success detected after attempt ${attempt - 1} for ${url}`);
             lastScreenshot = await this.safeCapture();
@@ -407,7 +407,7 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
         await this.executeFillActions(submitClickActions);
         await this.sleep(1500);
 
-        const submitted = await this.detectSuccess(preSubmitUrl);
+        const submitted = await this.detectSuccess(preSubmitUrl, fieldFillActions.map(a => a.selector));
 
         if (submitted) {
           if (cacheStrategy === 'hash') {
@@ -1143,24 +1143,36 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
     }
   }
 
-  private async detectSuccess(preSubmitUrl: string): Promise<boolean> {
+  private async detectSuccess(preSubmitUrl: string, filledSelectors: string[] = []): Promise<boolean> {
     try {
       const currentUrl = await this.client.client.url();
       // URL navigation is the strongest signal — the form submitted and redirected.
       if (currentUrl !== preSubmitUrl) return true;
 
-      // A visible success message is a reliable in-page signal.
+      // A visible success/confirmation message is a reliable in-page signal.
+      // This list covers the most common patterns used by marketing/contact forms.
       const hasSuccessMessage: boolean = await this.client.client.evaluate(() => {
         const text = (document.body as HTMLElement).innerText.toLowerCase();
-        return ['thank you', 'thanks!', 'success', 'submitted', 'received', 'confirmed']
-          .some((p) => text.includes(p));
+        return [
+          'thank you', 'thanks!', 'success', 'submitted', 'received', 'confirmed',
+          'message was sent', 'your message', 'been sent', 'we\'ll be in touch',
+          'we will be in touch', 'get back to you', 'hear from us', 'contact you soon',
+          'on its way', 'request received', 'form submitted', 'submission received',
+        ].some((p) => text.includes(p));
       }) as boolean;
       if (hasSuccessMessage) return true;
 
-      // NOTE: We intentionally do NOT use "formGone" (no <form> elements) as a
-      // standalone success signal. Many modern pages use custom form components
-      // that never render a <form> element, so formGone would always be true and
-      // produce false positives on every attempt.
+      // SPA/in-place replacement: if ALL of the field selectors we filled are
+      // now absent from the DOM, the form was replaced by a confirmation panel.
+      // Requires at least 2 selectors to avoid false positives from a single
+      // element that was merely hidden by CSS.
+      if (filledSelectors.length >= 2) {
+        const allGone: boolean = await this.client.client.evaluate((selectors: string[]) => {
+          return selectors.every(sel => document.querySelector(sel) === null);
+        }, filledSelectors) as boolean;
+        if (allGone) return true;
+      }
+
       return false;
     } catch (_) {
       return false;
