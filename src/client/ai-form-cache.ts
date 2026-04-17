@@ -4,12 +4,14 @@ import * as crypto from 'crypto';
 export interface CachedFormFill {
   formHash: string;
   fillActions: AiCachedFillAction[];
+  revealActions?: AiCachedFillAction[];
 }
 
 export interface AiCachedFillAction {
   selector: string;
   value: string;
-  inputType: 'text' | 'select' | 'checkbox' | 'radio' | 'click';
+  inputType: 'text' | 'select' | 'checkbox' | 'radio' | 'click' | 'scroll' | 'focusFrame' | 'selectCustomDropdown';
+  waitAfter?: number;
 }
 
 /**
@@ -62,10 +64,20 @@ export class AiFormCache {
     }
   }
 
-  public async set(requestorId: string, url: string, formHash: string, fillActions: AiCachedFillAction[]): Promise<void> {
+  public async set(
+    requestorId: string,
+    url: string,
+    formHash: string,
+    fillActions: AiCachedFillAction[],
+    revealActions?: AiCachedFillAction[],
+  ): Promise<void> {
     if (!this.setAsync) return;
     try {
-      const value: CachedFormFill = { formHash, fillActions };
+      const value: CachedFormFill = {
+        formHash,
+        fillActions,
+        ...(revealActions && revealActions.length > 0 ? { revealActions } : {}),
+      };
       await this.setAsync(this.buildKey(requestorId, url), AiFormCache.TTL_SECONDS, JSON.stringify(value));
     } catch (err) {
       console.log('[AiFormCache] Redis set error (non-fatal):', err);

@@ -101,6 +101,54 @@ describe('AiFormCache', () => {
       expect(parsed.fillActions).to.deep.equal(FILL_ACTIONS);
     });
 
+    it('set() stores revealActions when provided', async () => {
+      const REVEAL_ACTIONS: AiCachedFillAction[] = [
+        { selector: '#country', value: 'United States', inputType: 'select', waitAfter: 3000 },
+      ];
+      await cache.set(REQUESTOR_ID, URL, FORM_HASH, FILL_ACTIONS, REVEAL_ACTIONS);
+
+      const [,, value] = redisSetexStub.firstCall.args;
+      const parsed = JSON.parse(value);
+      expect(parsed.revealActions).to.deep.equal(REVEAL_ACTIONS);
+    });
+
+    it('set() omits revealActions key when not provided', async () => {
+      await cache.set(REQUESTOR_ID, URL, FORM_HASH, FILL_ACTIONS);
+
+      const [,, value] = redisSetexStub.firstCall.args;
+      const parsed = JSON.parse(value);
+      expect(parsed).to.not.have.property('revealActions');
+    });
+
+    it('set() omits revealActions key when an empty array is provided', async () => {
+      await cache.set(REQUESTOR_ID, URL, FORM_HASH, FILL_ACTIONS, []);
+
+      const [,, value] = redisSetexStub.firstCall.args;
+      const parsed = JSON.parse(value);
+      expect(parsed).to.not.have.property('revealActions');
+    });
+
+    it('get() returns revealActions when stored', async () => {
+      const REVEAL_ACTIONS: AiCachedFillAction[] = [
+        { selector: '#country', value: 'United States', inputType: 'select', waitAfter: 3000 },
+      ];
+      const stored = JSON.stringify({ formHash: FORM_HASH, fillActions: FILL_ACTIONS, revealActions: REVEAL_ACTIONS });
+      redisGetStub.callsFake((_key: string, cb: Function) => cb(null, stored));
+
+      const result = await cache.get(REQUESTOR_ID, URL);
+
+      expect(result!.revealActions).to.deep.equal(REVEAL_ACTIONS);
+    });
+
+    it('get() returns undefined revealActions when not stored', async () => {
+      const stored = JSON.stringify({ formHash: FORM_HASH, fillActions: FILL_ACTIONS });
+      redisGetStub.callsFake((_key: string, cb: Function) => cb(null, stored));
+
+      const result = await cache.get(REQUESTOR_ID, URL);
+
+      expect(result!.revealActions).to.be.undefined;
+    });
+
     it('set() is non-fatal when Redis throws', async () => {
       redisSetexStub.callsFake((_k: string, _t: number, _v: string, cb: Function) =>
         cb(new Error('ECONNREFUSED')),

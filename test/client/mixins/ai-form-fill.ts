@@ -1,4 +1,5 @@
 import * as chai from 'chai';
+import * as chaiAsPromised from 'chai-as-promised';
 import { default as sinon } from 'ts-sinon';
 import * as sinonChai from 'sinon-chai';
 import 'mocha';
@@ -6,6 +7,7 @@ import 'mocha';
 import { AiFormFill, AiFillAction } from '../../../src/client/mixins/ai-form-fill';
 
 chai.use(sinonChai);
+chai.use(chaiAsPromised);
 
 describe('AiFormFill', () => {
   const expect = chai.expect;
@@ -298,6 +300,101 @@ describe('AiFormFill', () => {
       const [callArgs] = createStub.firstCall.args;
       const textPart = callArgs.messages[1].content.find((c: any) => c.type === 'text');
       expect(textPart.text).to.not.include('ADDITIONAL FORM CONTEXT');
+    });
+  });
+
+  // ── getRevealActions ─────────────────────────────────────────────────────────
+
+  describe('getRevealActions', () => {
+    let aiFormFill: AiFormFill;
+    let createStub: sinon.SinonStub;
+
+    const REVEAL_ACTIONS = [
+      { selector: '#country', value: 'United States', inputType: 'select', waitAfter: 3000 },
+    ];
+
+    beforeEach(() => {
+      process.env.AZURE_OPENAI_ENDPOINT = 'https://test.openai.azure.com/';
+      process.env.AZURE_OPENAI_API_KEY = 'test-key';
+      process.env.AZURE_OPENAI_DEPLOYMENT_NAME = 'gpt-4o';
+
+      aiFormFill = new AiFormFill();
+      createStub = sinon.stub().resolves(makeOpenAiResponse(JSON.stringify(REVEAL_ACTIONS)));
+      (aiFormFill as any).openai = { chat: { completions: { create: createStub } } };
+    });
+
+    afterEach(() => {
+      sinon.restore();
+      delete process.env.AZURE_OPENAI_ENDPOINT;
+      delete process.env.AZURE_OPENAI_API_KEY;
+      delete process.env.AZURE_OPENAI_DEPLOYMENT_NAME;
+    });
+
+    it('returns parsed reveal actions from the AI response', async () => {
+      const actions = await aiFormFill.getRevealActions('screenshot', '<body></body>', 'Select United States first');
+
+      expect(actions).to.deep.equal(REVEAL_ACTIONS);
+    });
+
+    it('returns an empty array when AI responds with []', async () => {
+      createStub.resolves(makeOpenAiResponse('[]'));
+
+      const actions = await aiFormFill.getRevealActions('screenshot', '', 'Form is already visible');
+      expect(actions).to.deep.equal([]);
+    });
+
+    it('sends a single-turn message (system + user) with the screenshot', async () => {
+      await aiFormFill.getRevealActions('base64screenshot', '', 'Click the Contact tab');
+
+      const [callArgs] = createStub.firstCall.args;
+      expect(callArgs.messages).to.have.length(2);
+      expect(callArgs.messages[0].role).to.equal('system');
+      expect(callArgs.messages[1].role).to.equal('user');
+
+      const imagePart = callArgs.messages[1].content.find((c: any) => c.type === 'image_url');
+      expect(imagePart.image_url.url).to.include('base64screenshot');
+    });
+
+    it('includes the userHint in the user message text', async () => {
+      const hint = 'Click the Contact tab to reveal the form';
+      await aiFormFill.getRevealActions('screenshot', '', hint);
+
+      const [callArgs] = createStub.firstCall.args;
+      const textPart = callArgs.messages[1].content.find((c: any) => c.type === 'text');
+      expect(textPart.text).to.include(hint);
+    });
+
+    it('uses a low max_tokens limit (reveal prompt is small)', async () => {
+      await aiFormFill.getRevealActions('screenshot', '', 'Some hint');
+
+      const [callArgs] = createStub.firstCall.args;
+      expect(callArgs.max_tokens).to.be.at.most(600);
+    });
+
+    it('uses the reveal system prompt (not the form-fill prompt)', async () => {
+      await aiFormFill.getRevealActions('screenshot', '', 'hint');
+
+      const [callArgs] = createStub.firstCall.args;
+      const sysContent = callArgs.messages[0].content;
+      // Reveal prompt focuses on revealing the form, not filling it
+      expect(sysContent).to.include('make the main fillable form visible');
+      expect(sysContent).to.not.include('fill out and submit');
+    });
+
+    it('strips markdown fences from the AI response before parsing', async () => {
+      createStub.resolves(makeOpenAiResponse('```json\n' + JSON.stringify(REVEAL_ACTIONS) + '\n```'));
+
+      const actions = await aiFormFill.getRevealActions('screenshot', '', 'hint');
+      expect(actions).to.deep.equal(REVEAL_ACTIONS);
+    });
+
+    it('includes page HTML in the user message when provided', async () => {
+      const html = '<body><select name="country"><option value="US">United States</option></select></body>';
+      await aiFormFill.getRevealActions('screenshot', html, 'Select United States');
+
+      const [callArgs] = createStub.firstCall.args;
+      const textPart = callArgs.messages[1].content.find((c: any) => c.type === 'text');
+      expect(textPart.text).to.include('country');
     });
   });
 
