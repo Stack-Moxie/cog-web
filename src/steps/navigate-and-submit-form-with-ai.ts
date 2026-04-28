@@ -634,27 +634,64 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
             ? action.selector.replace(/\s+option(\[.*?\])?$/i, '').trim()
             : action.selector;
 
+          // activeSelector starts as the normalised selector; either the select
+          // idempotency evaluate or the clear-field evaluate will upgrade it to a
+          // form-scoped selector when duplicate IDs are detected (Marketo ghost forms).
+          // The resolution is embedded in those existing evaluate calls so that no
+          // extra round-trip is introduced (which would break test mock ordering).
+          let activeSelector = normalizedSelector;
+
           // Idempotency guard for <select> elements: if the field is already set
           // to the target value, skip the clear+fill cycle entirely.  Re-setting a
           // select triggers the page's change-event cascade (e.g. re-selecting
           // "United States" resets the dependent customer-type and inquiry-type
           // dropdowns, which then disappear from the DOM).
+          // Ghost-form resolution is embedded here: the evaluate returns `resolved`
+          // in addition to the state so we don't need a separate evaluate call.
           if (action.inputType === 'select') {
             try {
               const selectState = await this.client.client.evaluate((sel: string, targetVal: string) => {
-                const el = document.querySelector(sel) as HTMLSelectElement | null;
-                if (!el) return { currentVal: null, optionExists: false };
+                // Ghost-form resolution: prefer the visible on-screen element when
+                // duplicate IDs exist (e.g. Marketo hidden ghost form copies).
+                let resolved = sel;
+                const all = Array.from(document.querySelectorAll(sel));
+                if (all.length > 1) {
+                  for (let idx = 0; idx < all.length; idx++) {
+                    const r = (all[idx] as HTMLElement).getBoundingClientRect();
+                    const cs = window.getComputedStyle(all[idx] as HTMLElement);
+                    if (
+                      r.left > -200 && r.top > -200 && r.width > 0 &&
+                      cs.visibility !== 'hidden' && cs.display !== 'none'
+                    ) {
+                      const form = (all[idx] as HTMLElement).closest('form[id]') as HTMLElement | null;
+                      if (form && form.id) resolved = '#' + CSS.escape(form.id) + ' ' + sel;
+                      break;
+                    }
+                  }
+                }
+                const el = document.querySelector(resolved) as HTMLSelectElement | null;
+                if (!el) return { resolved, currentVal: null as string | null, optionExists: false };
                 const currentVal = el.value;
                 // Check both value attribute and visible text of each option
                 const tl = targetVal.toLowerCase();
                 const optionExists = Array.from(el.options).some(
                   o => o.value.toLowerCase() === tl || o.text.trim().toLowerCase() === tl,
                 );
-                return { currentVal, optionExists };
+                return { resolved, currentVal, optionExists };
               }, normalizedSelector, action.value);
 
-              if (selectState.currentVal !== null && selectState.currentVal.toLowerCase() === action.value.toLowerCase()) {
-                console.log(`[AI-Step] [${phase}] Skipping select "${normalizedSelector}" — already "${selectState.currentVal}"`);
+              if (selectState && typeof selectState === 'object') {
+                const resolved = (selectState as any).resolved;
+                if (typeof resolved === 'string' && resolved.length > 0) {
+                  activeSelector = resolved;
+                  if (activeSelector !== normalizedSelector) {
+                    console.log(`[AI-Step] [${phase}] Ghost form: resolved "${normalizedSelector}" → "${activeSelector}"`);
+                  }
+                }
+              }
+
+              if (selectState && (selectState as any).currentVal !== null && (selectState as any).currentVal?.toLowerCase() === action.value.toLowerCase()) {
+                console.log(`[AI-Step] [${phase}] Skipping select "${activeSelector}" — already "${(selectState as any).currentVal}"`);
                 if (action.waitAfter && action.waitAfter > 0) await this.sleep(action.waitAfter);
                 continue;
               }
@@ -663,38 +700,72 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
               // the <select> and the field already has a valid value, skip to
               // avoid corrupting a good selection (frame.select() with a missing
               // option silently resets the DOM value to "").
-              if (!selectState.optionExists) {
-                if (selectState.currentVal && selectState.currentVal !== '' && selectState.currentVal.toLowerCase() !== 'select...') {
-                  console.log(`[AI-Step] [${phase}] Skipping select "${normalizedSelector}" — option "${action.value}" not found (keeping "${selectState.currentVal}")`);
+              if (selectState && !(selectState as any).optionExists) {
+                const cv = (selectState as any).currentVal;
+                if (cv && cv !== '' && cv.toLowerCase() !== 'select...') {
+                  console.log(`[AI-Step] [${phase}] Skipping select "${activeSelector}" — option "${action.value}" not found (keeping "${cv}")`);
                 } else {
-                  console.log(`[AI-Step] [${phase}] Skipping select "${normalizedSelector}" — option "${action.value}" not in DOM`);
+                  console.log(`[AI-Step] [${phase}] Skipping select "${activeSelector}" — option "${action.value}" not in DOM`);
                 }
                 continue;
               }
             } catch (_) {}
           }
 
-          // Resolve to the visible element when duplicate IDs exist (e.g.
-          // Marketo creates an off-screen ghost form copy with the same field
-          // IDs as the visible form). document.querySelector() returns the
-          // first match in DOM order, which is often the ghost form.
-          const activeSelector = await this.resolveOnScreenSelector(normalizedSelector);
-          if (activeSelector !== normalizedSelector) {
-            console.log(`[AI-Step] [${phase}] Ghost form: resolved "${normalizedSelector}" → "${activeSelector}"`);
+          // For non-select fields, clear the value and resolve the on-screen
+          // selector in a single evaluate call (no extra round-trip vs before).
+          if (action.inputType !== 'select') {
+            try {
+              const resolved = await this.client.client.evaluate((sel: string) => {
+                // Ghost-form resolution embedded here to avoid an extra evaluate call.
+                let active = sel;
+                const all = Array.from(document.querySelectorAll(sel));
+                if (all.length > 1) {
+                  for (let idx = 0; idx < all.length; idx++) {
+                    const r = (all[idx] as HTMLElement).getBoundingClientRect();
+                    const cs = window.getComputedStyle(all[idx] as HTMLElement);
+                    if (
+                      r.left > -200 && r.top > -200 && r.width > 0 &&
+                      cs.visibility !== 'hidden' && cs.display !== 'none'
+                    ) {
+                      const form = (all[idx] as HTMLElement).closest('form[id]') as HTMLElement | null;
+                      if (form && form.id) active = '#' + CSS.escape(form.id) + ' ' + sel;
+                      break;
+                    }
+                  }
+                }
+                // Clear current value
+                const el = document.querySelector(active) as HTMLInputElement;
+                if (el && 'value' in el && el.type !== 'checkbox' && el.type !== 'radio') {
+                  el.value = '';
+                  el.dispatchEvent(new Event('input', { bubbles: true }));
+                  el.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+                return active;
+              }, normalizedSelector);
+              if (typeof resolved === 'string' && resolved.length > 0) {
+                activeSelector = resolved;
+                if (activeSelector !== normalizedSelector) {
+                  console.log(`[AI-Step] [${phase}] Ghost form: resolved "${normalizedSelector}" → "${activeSelector}"`);
+                }
+              }
+            } catch (_) {
+              // Non-fatal — proceed with fill even if clear/resolve fails
+            }
+          } else {
+            // Select: clear using activeSelector (already resolved above).
+            try {
+              await this.client.client.evaluate((sel: string) => {
+                const el = document.querySelector(sel) as HTMLInputElement;
+                if (el && 'value' in el && el.type !== 'checkbox' && el.type !== 'radio') {
+                  el.value = '';
+                  el.dispatchEvent(new Event('input', { bubbles: true }));
+                  el.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+              }, activeSelector);
+            } catch (_) {}
           }
 
-          try {
-            await this.client.client.evaluate((sel: string) => {
-              const el = document.querySelector(sel) as HTMLInputElement;
-              if (el && 'value' in el && el.type !== 'checkbox' && el.type !== 'radio') {
-                el.value = '';
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-              }
-            }, activeSelector);
-          } catch (_) {
-            // Non-fatal — proceed with fill even if clear fails
-          }
           await this.client.fillOutField(activeSelector, action.value);
 
           // Post-fill verification for selects: confirm the DOM value stuck.
@@ -736,47 +807,6 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
       }
     }
     return anyFailed;
-  }
-
-  /**
-   * When a CSS selector matches multiple elements (e.g. Marketo ghost forms
-   * that duplicate field IDs), returns a scoped selector that targets only
-   * the on-screen, visible element.  If there is only one match or no
-   * off-screen duplicate is detected, the original selector is returned
-   * unchanged so nothing changes for normal pages.
-   */
-  private async resolveOnScreenSelector(selector: string): Promise<string> {
-    try {
-      return await this.client.client.evaluate((sel: string) => {
-        const elements = Array.from(document.querySelectorAll(sel));
-        if (elements.length <= 1) return sel; // no duplicates — use as-is
-
-        for (const el of elements) {
-          const rect = (el as HTMLElement).getBoundingClientRect();
-          const style = window.getComputedStyle(el as HTMLElement);
-          // Skip elements that are off-screen (ghost forms positioned at large
-          // negative coordinates) or explicitly invisible.
-          if (
-            rect.left < -200 ||
-            rect.top < -200 ||
-            rect.width === 0 ||
-            style.visibility === 'hidden' ||
-            style.display === 'none'
-          ) {
-            continue;
-          }
-          // Found a visible element — scope selector to its parent form if possible.
-          const form = (el as HTMLElement).closest('form[id]') as HTMLElement | null;
-          if (form && form.id) {
-            return `#${CSS.escape(form.id)} ${sel}`;
-          }
-          return sel;
-        }
-        return sel; // fallback — no clearly on-screen element found
-      }, selector) as string;
-    } catch (_) {
-      return selector;
-    }
   }
 
   /**
