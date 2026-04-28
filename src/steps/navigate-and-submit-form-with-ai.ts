@@ -377,9 +377,20 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
         }
 
         console.log(`[AI-Step] Calling AI — attempt ${attempt}/${maxAttempts} for ${url}`);
-        const result = await aiHelper.getFillActions(initialScreenshot, formHtml, fieldOverrides, messages, userHint);
-        messages = result.messages;
-        fillActions = result.actions;
+        try {
+          const result = await aiHelper.getFillActions(initialScreenshot, formHtml, fieldOverrides, messages, userHint);
+          messages = result.messages;
+          fillActions = result.actions;
+        } catch (aiErr) {
+          // On transient AI service errors (e.g. Azure 500), reuse the previous
+          // attempt's fill actions rather than aborting. The fields may already
+          // be populated from the last attempt — all we need is another submit.
+          if (fillActions && fillActions.length > 0) {
+            console.log(`[AI-Step] AI call failed on attempt ${attempt} (${aiErr}) — reusing ${fillActions.length} action(s) from previous attempt`);
+          } else {
+            throw aiErr; // No fallback available — let outer catch handle it
+          }
+        }
 
         // Separate submit-click actions from field-fill actions so we can run a
         // progressive scan (for conditional/cascading fields) before submitting.
@@ -582,8 +593,34 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
             }
             await this.client.clickElement(action.selector);
           } else {
-            // Form-submit click
-            await this.client.submitFormByClickingButton(action.selector);
+            // Form-submit click. If the primary selector fails (e.g. AI targeted an
+            // Unbounce page-level CTA instead of the Marketo form's own submit button),
+            // try well-known fallback submit selectors before giving up.
+            try {
+              await this.client.submitFormByClickingButton(action.selector);
+            } catch (clickErr) {
+              const FALLBACK_SUBMIT_SELECTORS = [
+                'form[id] .mktoButton',
+                'form .mktoButton',
+                'form [type="submit"]',
+              ];
+              let fallbackUsed = false;
+              for (const fb of FALLBACK_SUBMIT_SELECTORS) {
+                if (fb === action.selector) continue;
+                try {
+                  const exists = await this.client.client.evaluate(
+                    (sel: string) => !!document.querySelector(sel), fb,
+                  ) as boolean;
+                  if (exists) {
+                    console.log(`[AI-Step] Primary click failed — trying fallback submit: "${fb}"`);
+                    await this.client.submitFormByClickingButton(fb);
+                    fallbackUsed = true;
+                    break;
+                  }
+                } catch (_) {}
+              }
+              if (!fallbackUsed) throw clickErr;
+            }
           }
         } else {
           // text / select / checkbox / radio — clear before filling to prevent
@@ -637,6 +674,15 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
             } catch (_) {}
           }
 
+          // Resolve to the visible element when duplicate IDs exist (e.g.
+          // Marketo creates an off-screen ghost form copy with the same field
+          // IDs as the visible form). document.querySelector() returns the
+          // first match in DOM order, which is often the ghost form.
+          const activeSelector = await this.resolveOnScreenSelector(normalizedSelector);
+          if (activeSelector !== normalizedSelector) {
+            console.log(`[AI-Step] [${phase}] Ghost form: resolved "${normalizedSelector}" → "${activeSelector}"`);
+          }
+
           try {
             await this.client.client.evaluate((sel: string) => {
               const el = document.querySelector(sel) as HTMLInputElement;
@@ -645,11 +691,11 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
                 el.dispatchEvent(new Event('input', { bubbles: true }));
                 el.dispatchEvent(new Event('change', { bubbles: true }));
               }
-            }, normalizedSelector);
+            }, activeSelector);
           } catch (_) {
             // Non-fatal — proceed with fill even if clear fails
           }
-          await this.client.fillOutField(normalizedSelector, action.value);
+          await this.client.fillOutField(activeSelector, action.value);
 
           // Post-fill verification for selects: confirm the DOM value stuck.
           if (action.inputType === 'select') {
@@ -657,8 +703,8 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
               const domVal = await this.client.client.evaluate((sel: string) => {
                 const el = document.querySelector(sel) as HTMLSelectElement | null;
                 return el ? el.value : '__NOT_FOUND__';
-              }, normalizedSelector);
-              console.log(`[AI-Step] [${phase}] select post-fill: "${normalizedSelector}" → DOM value="${domVal}"`);
+              }, activeSelector);
+              console.log(`[AI-Step] [${phase}] select post-fill: "${activeSelector}" → DOM value="${domVal}"`);
             } catch (_) {}
           }
         }
@@ -690,6 +736,47 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
       }
     }
     return anyFailed;
+  }
+
+  /**
+   * When a CSS selector matches multiple elements (e.g. Marketo ghost forms
+   * that duplicate field IDs), returns a scoped selector that targets only
+   * the on-screen, visible element.  If there is only one match or no
+   * off-screen duplicate is detected, the original selector is returned
+   * unchanged so nothing changes for normal pages.
+   */
+  private async resolveOnScreenSelector(selector: string): Promise<string> {
+    try {
+      return await this.client.client.evaluate((sel: string) => {
+        const elements = Array.from(document.querySelectorAll(sel));
+        if (elements.length <= 1) return sel; // no duplicates — use as-is
+
+        for (const el of elements) {
+          const rect = (el as HTMLElement).getBoundingClientRect();
+          const style = window.getComputedStyle(el as HTMLElement);
+          // Skip elements that are off-screen (ghost forms positioned at large
+          // negative coordinates) or explicitly invisible.
+          if (
+            rect.left < -200 ||
+            rect.top < -200 ||
+            rect.width === 0 ||
+            style.visibility === 'hidden' ||
+            style.display === 'none'
+          ) {
+            continue;
+          }
+          // Found a visible element — scope selector to its parent form if possible.
+          const form = (el as HTMLElement).closest('form[id]') as HTMLElement | null;
+          if (form && form.id) {
+            return `#${CSS.escape(form.id)} ${sel}`;
+          }
+          return sel;
+        }
+        return sel; // fallback — no clearly on-screen element found
+      }, selector) as string;
+    } catch (_) {
+      return selector;
+    }
   }
 
   /**
@@ -916,6 +1003,8 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
 
         for (const sel of selects) {
           if (!sel.offsetParent) continue; // hidden/detached
+          const rect = sel.getBoundingClientRect();
+          if (rect.left < -200 || rect.top < -200) continue; // ghost form off-screen
           const val = sel.value.trim().toLowerCase();
           if (!PLACEHOLDER_VALUES.includes(val)) continue; // already filled
 
@@ -1011,6 +1100,8 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
         const inputs = Array.from(document.querySelectorAll(SELECTORS)) as HTMLInputElement[];
         for (const el of inputs) {
           if (!el.offsetParent) continue; // hidden
+          const rect = el.getBoundingClientRect();
+          if (rect.left < -200 || rect.top < -200) continue; // ghost form off-screen
           const type = (el.type || '').toLowerCase();
           if (!TEXT_TYPES.has(type)) continue; // skip checkbox/radio/hidden etc.
           if ((el.value || '').trim() !== '') continue; // already filled
@@ -1104,6 +1195,11 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
           // or are scrolled way above the viewport).
           if (rect.width === 0 || rect.height === 0) continue;
           if (!(el as HTMLElement).offsetParent) continue;
+          // Skip elements positioned way off-screen — Marketo ghost forms use
+          // visibility:hidden + position:absolute at top:-500px / left:-1000px.
+          // offsetParent is still non-null for visibility:hidden, so we need
+          // this extra position guard.
+          if (rect.left < -200 || rect.top < -200) continue;
 
           // Deduplicate by element ID
           const elId = (el as HTMLInputElement).id;
