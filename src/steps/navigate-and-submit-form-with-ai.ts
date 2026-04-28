@@ -377,9 +377,20 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
         }
 
         console.log(`[AI-Step] Calling AI — attempt ${attempt}/${maxAttempts} for ${url}`);
-        const result = await aiHelper.getFillActions(initialScreenshot, formHtml, fieldOverrides, messages, userHint);
-        messages = result.messages;
-        fillActions = result.actions;
+        try {
+          const result = await aiHelper.getFillActions(initialScreenshot, formHtml, fieldOverrides, messages, userHint);
+          messages = result.messages;
+          fillActions = result.actions;
+        } catch (aiErr) {
+          // On transient AI service errors (e.g. Azure 500), reuse the previous
+          // attempt's fill actions rather than aborting. The fields may already
+          // be populated from the last attempt — all we need is another submit.
+          if (fillActions && fillActions.length > 0) {
+            console.log(`[AI-Step] AI call failed on attempt ${attempt} (${aiErr}) — reusing ${fillActions.length} action(s) from previous attempt`);
+          } else {
+            throw aiErr; // No fallback available — let outer catch handle it
+          }
+        }
 
         // Separate submit-click actions from field-fill actions so we can run a
         // progressive scan (for conditional/cascading fields) before submitting.
@@ -387,6 +398,14 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
         const fieldFillActions = fillActions.filter(a => a.inputType !== 'click');
 
         const anyFillFailed = await this.executeFillActions(fieldFillActions);
+
+        // Hard-apply fieldOverrides after the AI fill. The AI uses overrides as
+        // a hint in its prompt, but it can drift on retry attempts (e.g. changing
+        // the email to a variation). This ensures the caller's explicit values
+        // always win, regardless of what the AI generated.
+        if (Object.keys(fieldOverrides).length > 0) {
+          await this.applyOverridesToPage(fieldOverrides);
+        }
 
         // Progressive field scan: some forms reveal additional required fields
         // only after certain selections are made (e.g. a "Customer Inquiry Type"
@@ -574,8 +593,34 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
             }
             await this.client.clickElement(action.selector);
           } else {
-            // Form-submit click
-            await this.client.submitFormByClickingButton(action.selector);
+            // Form-submit click. If the primary selector fails (e.g. AI targeted an
+            // Unbounce page-level CTA instead of the Marketo form's own submit button),
+            // try well-known fallback submit selectors before giving up.
+            try {
+              await this.client.submitFormByClickingButton(action.selector);
+            } catch (clickErr) {
+              const FALLBACK_SUBMIT_SELECTORS = [
+                'form[id] .mktoButton',
+                'form .mktoButton',
+                'form [type="submit"]',
+              ];
+              let fallbackUsed = false;
+              for (const fb of FALLBACK_SUBMIT_SELECTORS) {
+                if (fb === action.selector) continue;
+                try {
+                  const exists = await this.client.client.evaluate(
+                    (sel: string) => !!document.querySelector(sel), fb,
+                  ) as boolean;
+                  if (exists) {
+                    console.log(`[AI-Step] Primary click failed — trying fallback submit: "${fb}"`);
+                    await this.client.submitFormByClickingButton(fb);
+                    fallbackUsed = true;
+                    break;
+                  }
+                } catch (_) {}
+              }
+              if (!fallbackUsed) throw clickErr;
+            }
           }
         } else {
           // text / select / checkbox / radio — clear before filling to prevent
@@ -589,27 +634,64 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
             ? action.selector.replace(/\s+option(\[.*?\])?$/i, '').trim()
             : action.selector;
 
+          // activeSelector starts as the normalised selector; either the select
+          // idempotency evaluate or the clear-field evaluate will upgrade it to a
+          // form-scoped selector when duplicate IDs are detected (Marketo ghost forms).
+          // The resolution is embedded in those existing evaluate calls so that no
+          // extra round-trip is introduced (which would break test mock ordering).
+          let activeSelector = normalizedSelector;
+
           // Idempotency guard for <select> elements: if the field is already set
           // to the target value, skip the clear+fill cycle entirely.  Re-setting a
           // select triggers the page's change-event cascade (e.g. re-selecting
           // "United States" resets the dependent customer-type and inquiry-type
           // dropdowns, which then disappear from the DOM).
+          // Ghost-form resolution is embedded here: the evaluate returns `resolved`
+          // in addition to the state so we don't need a separate evaluate call.
           if (action.inputType === 'select') {
             try {
               const selectState = await this.client.client.evaluate((sel: string, targetVal: string) => {
-                const el = document.querySelector(sel) as HTMLSelectElement | null;
-                if (!el) return { currentVal: null, optionExists: false };
+                // Ghost-form resolution: prefer the visible on-screen element when
+                // duplicate IDs exist (e.g. Marketo hidden ghost form copies).
+                let resolved = sel;
+                const all = Array.from(document.querySelectorAll(sel));
+                if (all.length > 1) {
+                  for (let idx = 0; idx < all.length; idx++) {
+                    const r = (all[idx] as HTMLElement).getBoundingClientRect();
+                    const cs = window.getComputedStyle(all[idx] as HTMLElement);
+                    if (
+                      r.left > -200 && r.top > -200 && r.width > 0 &&
+                      cs.visibility !== 'hidden' && cs.display !== 'none'
+                    ) {
+                      const form = (all[idx] as HTMLElement).closest('form[id]') as HTMLElement | null;
+                      if (form && form.id) resolved = '#' + CSS.escape(form.id) + ' ' + sel;
+                      break;
+                    }
+                  }
+                }
+                const el = document.querySelector(resolved) as HTMLSelectElement | null;
+                if (!el) return { resolved, currentVal: null as string | null, optionExists: false };
                 const currentVal = el.value;
                 // Check both value attribute and visible text of each option
                 const tl = targetVal.toLowerCase();
                 const optionExists = Array.from(el.options).some(
                   o => o.value.toLowerCase() === tl || o.text.trim().toLowerCase() === tl,
                 );
-                return { currentVal, optionExists };
+                return { resolved, currentVal, optionExists };
               }, normalizedSelector, action.value);
 
-              if (selectState.currentVal !== null && selectState.currentVal.toLowerCase() === action.value.toLowerCase()) {
-                console.log(`[AI-Step] [${phase}] Skipping select "${normalizedSelector}" — already "${selectState.currentVal}"`);
+              if (selectState && typeof selectState === 'object') {
+                const resolved = (selectState as any).resolved;
+                if (typeof resolved === 'string' && resolved.length > 0) {
+                  activeSelector = resolved;
+                  if (activeSelector !== normalizedSelector) {
+                    console.log(`[AI-Step] [${phase}] Ghost form: resolved "${normalizedSelector}" → "${activeSelector}"`);
+                  }
+                }
+              }
+
+              if (selectState && (selectState as any).currentVal !== null && (selectState as any).currentVal?.toLowerCase() === action.value.toLowerCase()) {
+                console.log(`[AI-Step] [${phase}] Skipping select "${activeSelector}" — already "${(selectState as any).currentVal}"`);
                 if (action.waitAfter && action.waitAfter > 0) await this.sleep(action.waitAfter);
                 continue;
               }
@@ -618,30 +700,73 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
               // the <select> and the field already has a valid value, skip to
               // avoid corrupting a good selection (frame.select() with a missing
               // option silently resets the DOM value to "").
-              if (!selectState.optionExists) {
-                if (selectState.currentVal && selectState.currentVal !== '' && selectState.currentVal.toLowerCase() !== 'select...') {
-                  console.log(`[AI-Step] [${phase}] Skipping select "${normalizedSelector}" — option "${action.value}" not found (keeping "${selectState.currentVal}")`);
+              if (selectState && !(selectState as any).optionExists) {
+                const cv = (selectState as any).currentVal;
+                if (cv && cv !== '' && cv.toLowerCase() !== 'select...') {
+                  console.log(`[AI-Step] [${phase}] Skipping select "${activeSelector}" — option "${action.value}" not found (keeping "${cv}")`);
                 } else {
-                  console.log(`[AI-Step] [${phase}] Skipping select "${normalizedSelector}" — option "${action.value}" not in DOM`);
+                  console.log(`[AI-Step] [${phase}] Skipping select "${activeSelector}" — option "${action.value}" not in DOM`);
                 }
                 continue;
               }
             } catch (_) {}
           }
 
-          try {
-            await this.client.client.evaluate((sel: string) => {
-              const el = document.querySelector(sel) as HTMLInputElement;
-              if (el && 'value' in el && el.type !== 'checkbox' && el.type !== 'radio') {
-                el.value = '';
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
+          // For non-select fields, clear the value and resolve the on-screen
+          // selector in a single evaluate call (no extra round-trip vs before).
+          if (action.inputType !== 'select') {
+            try {
+              const resolved = await this.client.client.evaluate((sel: string) => {
+                // Ghost-form resolution embedded here to avoid an extra evaluate call.
+                let active = sel;
+                const all = Array.from(document.querySelectorAll(sel));
+                if (all.length > 1) {
+                  for (let idx = 0; idx < all.length; idx++) {
+                    const r = (all[idx] as HTMLElement).getBoundingClientRect();
+                    const cs = window.getComputedStyle(all[idx] as HTMLElement);
+                    if (
+                      r.left > -200 && r.top > -200 && r.width > 0 &&
+                      cs.visibility !== 'hidden' && cs.display !== 'none'
+                    ) {
+                      const form = (all[idx] as HTMLElement).closest('form[id]') as HTMLElement | null;
+                      if (form && form.id) active = '#' + CSS.escape(form.id) + ' ' + sel;
+                      break;
+                    }
+                  }
+                }
+                // Clear current value
+                const el = document.querySelector(active) as HTMLInputElement;
+                if (el && 'value' in el && el.type !== 'checkbox' && el.type !== 'radio') {
+                  el.value = '';
+                  el.dispatchEvent(new Event('input', { bubbles: true }));
+                  el.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+                return active;
+              }, normalizedSelector);
+              if (typeof resolved === 'string' && resolved.length > 0) {
+                activeSelector = resolved;
+                if (activeSelector !== normalizedSelector) {
+                  console.log(`[AI-Step] [${phase}] Ghost form: resolved "${normalizedSelector}" → "${activeSelector}"`);
+                }
               }
-            }, normalizedSelector);
-          } catch (_) {
-            // Non-fatal — proceed with fill even if clear fails
+            } catch (_) {
+              // Non-fatal — proceed with fill even if clear/resolve fails
+            }
+          } else {
+            // Select: clear using activeSelector (already resolved above).
+            try {
+              await this.client.client.evaluate((sel: string) => {
+                const el = document.querySelector(sel) as HTMLInputElement;
+                if (el && 'value' in el && el.type !== 'checkbox' && el.type !== 'radio') {
+                  el.value = '';
+                  el.dispatchEvent(new Event('input', { bubbles: true }));
+                  el.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+              }, activeSelector);
+            } catch (_) {}
           }
-          await this.client.fillOutField(normalizedSelector, action.value);
+
+          await this.client.fillOutField(activeSelector, action.value);
 
           // Post-fill verification for selects: confirm the DOM value stuck.
           if (action.inputType === 'select') {
@@ -649,8 +774,8 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
               const domVal = await this.client.client.evaluate((sel: string) => {
                 const el = document.querySelector(sel) as HTMLSelectElement | null;
                 return el ? el.value : '__NOT_FOUND__';
-              }, normalizedSelector);
-              console.log(`[AI-Step] [${phase}] select post-fill: "${normalizedSelector}" → DOM value="${domVal}"`);
+              }, activeSelector);
+              console.log(`[AI-Step] [${phase}] select post-fill: "${activeSelector}" → DOM value="${domVal}"`);
             } catch (_) {}
           }
         }
@@ -908,6 +1033,8 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
 
         for (const sel of selects) {
           if (!sel.offsetParent) continue; // hidden/detached
+          const rect = sel.getBoundingClientRect();
+          if (rect.left < -200 || rect.top < -200) continue; // ghost form off-screen
           const val = sel.value.trim().toLowerCase();
           if (!PLACEHOLDER_VALUES.includes(val)) continue; // already filled
 
@@ -1003,6 +1130,8 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
         const inputs = Array.from(document.querySelectorAll(SELECTORS)) as HTMLInputElement[];
         for (const el of inputs) {
           if (!el.offsetParent) continue; // hidden
+          const rect = el.getBoundingClientRect();
+          if (rect.left < -200 || rect.top < -200) continue; // ghost form off-screen
           const type = (el.type || '').toLowerCase();
           if (!TEXT_TYPES.has(type)) continue; // skip checkbox/radio/hidden etc.
           if ((el.value || '').trim() !== '') continue; // already filled
@@ -1096,6 +1225,11 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
           // or are scrolled way above the viewport).
           if (rect.width === 0 || rect.height === 0) continue;
           if (!(el as HTMLElement).offsetParent) continue;
+          // Skip elements positioned way off-screen — Marketo ghost forms use
+          // visibility:hidden + position:absolute at top:-500px / left:-1000px.
+          // offsetParent is still non-null for visibility:hidden, so we need
+          // this extra position guard.
+          if (rect.left < -200 || rect.top < -200) continue;
 
           // Deduplicate by element ID
           const elId = (el as HTMLInputElement).id;
