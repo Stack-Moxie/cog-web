@@ -388,6 +388,14 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
 
         const anyFillFailed = await this.executeFillActions(fieldFillActions);
 
+        // Hard-apply fieldOverrides after the AI fill. The AI uses overrides as
+        // a hint in its prompt, but it can drift on retry attempts (e.g. changing
+        // the email to a variation). This ensures the caller's explicit values
+        // always win, regardless of what the AI generated.
+        if (Object.keys(fieldOverrides).length > 0) {
+          await this.applyOverridesToPage(fieldOverrides);
+        }
+
         // Progressive field scan: some forms reveal additional required fields
         // only after certain selections are made (e.g. a "Customer Inquiry Type"
         // dropdown that appears after "Are you a Roche customer?" = "Yes").
