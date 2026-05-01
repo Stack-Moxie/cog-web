@@ -163,8 +163,10 @@ describe('NavigateAndSubmitFormWithAI', () => {
   });
 
   // ── Cache: MISS → AI fills and saves ─────────────────────────────────────────
+  // TEMPORARILY SKIPPED: cache reads and writes are disabled in the step while
+  // ghost-form selector issues are resolved. Re-enable when cache is restored.
 
-  it('should pass and save to cache when AI fills the form successfully (cache MISS)', async () => {
+  it.skip('should pass and save to cache when AI fills the form successfully (cache MISS)', async () => {
     protoStep.setData(Struct.fromJavaScript({ webPageUrl: 'https://example.com/form' }));
 
     const response: RunStepResponse = await stepUnderTest.executeStep(protoStep);
@@ -178,7 +180,7 @@ describe('NavigateAndSubmitFormWithAI', () => {
 
   // ── Cache: HIT → no AI call ───────────────────────────────────────────────────
 
-  it('should pass from Redis cache without calling AI when hash matches (cache HIT)', async () => {
+  it.skip('should pass from Redis cache without calling AI when hash matches (cache HIT)', async () => {
     cacheGetStub.resolves({ formHash: FINGERPRINT_HASH, fillActions: SAMPLE_ACTIONS });
 
     protoStep.setData(Struct.fromJavaScript({ webPageUrl: 'https://example.com/form' }));
@@ -193,7 +195,7 @@ describe('NavigateAndSubmitFormWithAI', () => {
 
   // ── Cache HIT: fieldOverrides applied via DOM (two-pass) ─────────────────────
 
-  it('should apply fieldOverrides via DOM after cached fill, ignoring cached dummy values', async () => {
+  it.skip('should apply fieldOverrides via DOM after cached fill, ignoring cached dummy values', async () => {
     // Cache contains a dummy email value; override should replace it
     const cachedActions: AiFillAction[] = [
       { selector: '#fn', value: 'old@example.com', inputType: 'text' },   // opaque selector
@@ -224,7 +226,7 @@ describe('NavigateAndSubmitFormWithAI', () => {
     expect(clientWrapperStub.fillOutField).to.have.been.calledWith('[name="email"]', 'overridden@example.com');
   });
 
-  it('should fill unmatched cached fields with their original values and only override matched fields', async () => {
+  it.skip('should fill unmatched cached fields with their original values and only override matched fields', async () => {
     const cachedActions: AiFillAction[] = [
       { selector: 'input[name="firstName"]', value: 'Alex', inputType: 'text' },
       { selector: 'input[name="email"]', value: 'old@example.com', inputType: 'text' },
@@ -256,7 +258,7 @@ describe('NavigateAndSubmitFormWithAI', () => {
     expect(clientWrapperStub.fillOutField).to.have.been.calledWith('input[name="firstName"]', 'Alex');
   });
 
-  it('should skip override and still submit when no DOM field matches the override key', async () => {
+  it.skip('should skip override and still submit when no DOM field matches the override key', async () => {
     const cachedActions: AiFillAction[] = [
       { selector: 'button[type="submit"]', value: 'submit', inputType: 'click' },
     ];
@@ -284,7 +286,7 @@ describe('NavigateAndSubmitFormWithAI', () => {
 
   // ── Cache: STALE → re-runs AI and updates cache ───────────────────────────────
 
-  it('should re-run AI and update cache when form hash is stale (cache STALE)', async () => {
+  it.skip('should re-run AI and update cache when form hash is stale (cache STALE)', async () => {
     cacheGetStub.resolves({ formHash: 'oldhash', fillActions: SAMPLE_ACTIONS });
 
     protoStep.setData(Struct.fromJavaScript({ webPageUrl: 'https://example.com/form' }));
@@ -298,7 +300,7 @@ describe('NavigateAndSubmitFormWithAI', () => {
 
   // ── cacheStrategy: unsupported values fall back to "hash" ────────────────────
 
-  it('should fall back to "hash" strategy (check cache) when cacheStrategy is "always"', async () => {
+  it.skip('should fall back to "hash" strategy (check cache) when cacheStrategy is "always"', async () => {
     // "always" is no longer supported — it is silently normalised to "hash"
     // so the cache IS checked, and saves after a successful AI fill.
     protoStep.setData(Struct.fromJavaScript({
@@ -313,7 +315,7 @@ describe('NavigateAndSubmitFormWithAI', () => {
     expect(cacheSetStub).to.have.been.calledOnce;   // result was saved
   });
 
-  it('should fall back to "hash" strategy for any unrecognised cacheStrategy value', async () => {
+  it.skip('should fall back to "hash" strategy for any unrecognised cacheStrategy value', async () => {
     protoStep.setData(Struct.fromJavaScript({
       webPageUrl: 'https://example.com/form',
       cacheStrategy: 'never',
@@ -633,7 +635,7 @@ describe('NavigateAndSubmitFormWithAI', () => {
     expect(response.getOutcome()).to.equal(RunStepResponse.Outcome.PASSED);
   });
 
-  it('should include reveal actions in cache.set call', async () => {
+  it.skip('should include reveal actions in cache.set call', async () => {
     const revealActions = [{ selector: '#country', value: 'US', inputType: 'select' as const, waitAfter: 100 }];
     getRevealActionsStub.resolves(revealActions);
 

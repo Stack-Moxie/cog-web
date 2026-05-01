@@ -314,36 +314,10 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
     const formHash = crypto.createHash('sha256').update(formStructure).digest('hex');
 
     // ── Step 7: Redis cache check (hash strategy) ────────────────────────────────
-    // cacheEntry was already fetched in Step 4. We only need the hash comparison now.
-    if (cacheStrategy === 'hash' && cacheEntry) {
-      if (cacheEntry.formHash === formHash) {
-        const nonClickActions = cacheEntry.fillActions.filter(a => a.inputType !== 'click');
-        const clickActions = cacheEntry.fillActions.filter(a => a.inputType === 'click');
-        const overrideCount = Object.keys(fieldOverrides).length;
-        console.log(`[AI-Step] Cache HIT — executing ${cacheEntry.fillActions.length} cached actions for ${url}${overrideCount > 0 ? ` (applying ${overrideCount} fieldOverride(s) via DOM)` : ''}`);
-        try {
-          await this.executeFillActions(nonClickActions);
-          if (overrideCount > 0) {
-            await this.applyOverridesToPage(fieldOverrides);
-          }
-          await this.executeFillActions(clickActions);
-          await this.sleep(1500);
-          const screenshot = await this.safeCapture();
-          const records = this.buildRecords(url, cacheEntry.fillActions.length, 0, true, cacheStrategy, revealActions, cacheEntry.fillActions as AiFillAction[], screenshot, stepOrder);
-          return this.pass(
-            'Successfully filled out and submitted the form at %s (served from Redis cache)',
-            [url],
-            records,
-          );
-        } catch (execErr) {
-          console.log(`[AI-Step] Cached fill failed — falling through to AI: ${execErr.toString()}`);
-        }
-      } else {
-        console.log(`[AI-Step] Cache STALE — form structure changed for ${url}, re-running AI`);
-      }
-    } else if (!cacheEntry) {
-      console.log(`[AI-Step] Cache MISS — no entry for ${url}`);
-    }
+    // TEMPORARILY DISABLED — cache fill actions are not applying correctly to the
+    // visible form (ghost-form selector issue under investigation). Always fall
+    // through to the AI until the cache logic is fixed and re-enabled.
+    console.log(`[AI-Step] Cache disabled (temporary) — calling AI for ${url}`);
 
     // ── Step 8: AI fill loop ─────────────────────────────────────────────────────
     // Take the initial screenshot AFTER revelation so the AI sees the loaded form.
@@ -363,9 +337,7 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
             console.log(`[AI-Step] Late success detected after attempt ${attempt - 1} for ${url}`);
             lastScreenshot = await this.safeCapture();
             const records = this.buildRecords(url, fillActions!.length, attempt - 1, false, cacheStrategy, revealActions, fillActions!, lastScreenshot, stepOrder);
-            if (cacheStrategy === 'hash') {
-              await cache.set(requestorId, url, formHash, fillActions!, revealActions);
-            }
+            // cache.set temporarily disabled — see Step 7 comment above
             return this.pass(
               'Successfully filled out and submitted the form at %s after %d AI attempt(s)',
               [url, attempt - 1],
@@ -429,9 +401,7 @@ export class NavigateAndSubmitFormWithAI extends BaseStep implements StepInterfa
         const submitted = await this.detectSuccess(preSubmitUrl, fieldFillActions.map(a => a.selector));
 
         if (submitted) {
-          if (cacheStrategy === 'hash') {
-            await cache.set(requestorId, url, formHash, fillActions, revealActions);
-          }
+          // cache.set temporarily disabled — see Step 7 comment above
           lastScreenshot = await this.safeCapture();
           const records = this.buildRecords(url, fillActions.length, attempt, false, cacheStrategy, revealActions, fillActions, lastScreenshot, stepOrder);
           console.log(`[AI-Step] Form submitted successfully on attempt ${attempt} for ${url}`);
